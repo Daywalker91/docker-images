@@ -1,0 +1,44 @@
+# ─── VSCode ───────────────────────────────────────
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.code-workspace
+
+# ─── macOS ────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# ─── Windows ──────────────────────────────────────
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+
+# ─── Linux ────────────────────────────────────────
+*~
+.fuse_hidden*
+.Trash-*
+.nfs*
+
+# ─── Docker (lokale Tests) ────────────────────────
+*.tar
+*.tar.gz
+docker-compose.override.yml
+.env
+.env.*
+!.env.example
+
+# ─── Logs & Temp ──────────────────────────────────
+*.log
+*.tmp
+*.bak
+tmp/
+temp/
+
+# ─── Secrets (Sicherheitsnetz) ────────────────────
+*.pem
+*.key
+*.p12
+secrets/
