@@ -8,6 +8,10 @@ on:
     - cron: '0 4 * * *'   # täglich 04:00 UTC
   workflow_dispatch:
 
+# Node.js 24 opt-in (Pflicht ab 02.06.2026, entfernen sobald Actions nativ Node 24 nutzen)
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   # ──────────────────────────────────────────────
   # JOB 1: Aktuellen Digest von Docker Hub holen
