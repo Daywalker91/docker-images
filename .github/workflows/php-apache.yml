@@ -1,0 +1,127 @@
+name: Build php-apache
+
+on:
+  push:
+    paths:
+      - 'php-apache/Dockerfile'
+  schedule:
+    - cron: '0 4 * * *'   # täglich 04:00 UTC
+  workflow_dispatch:
+
+jobs:
+  # ──────────────────────────────────────────────
+  # JOB 1: Aktuellen Digest von Docker Hub holen
+  #         und mit gespeichertem Digest vergleichen
+  # ──────────────────────────────────────────────
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      needs_build: ${{ steps.compare.outputs.needs_build }}
+      current_digest: ${{ steps.digest.outputs.digest }}
+
+    steps:
+      - name: Digest von Docker Hub holen (php:apache)
+        id: digest
+        run: |
+          TOKEN=$(curl -s \
+            "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/php:pull" \
+            | jq -r .token)
+
+          DIGEST=$(curl -sI \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+            https://registry-1.docker.io/v2/library/php/manifests/apache \
+            | grep -i "docker-content-digest" \
+            | awk '{print $2}' \
+            | tr -d '\r')
+
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+          echo "Aktueller Digest: $DIGEST"
+
+      - name: Vergleich mit gespeichertem Digest
+        id: compare
+        run: |
+          STORED="${{ vars.PHP_APACHE_DIGEST }}"
+          CURRENT="${{ steps.digest.outputs.digest }}"
+
+          echo "Gespeichert : $STORED"
+          echo "Aktuell     : $CURRENT"
+
+          if [ "$STORED" != "$CURRENT" ]; then
+            echo "→ Neues Basis-Image erkannt, Build wird gestartet"
+            echo "needs_build=true" >> $GITHUB_OUTPUT
+          else
+            echo "→ Kein Update, Build wird übersprungen"
+            echo "needs_build=false" >> $GITHUB_OUTPUT
+          fi
+
+  # ──────────────────────────────────────────────
+  # JOB 2: Multiarch-Image bauen und auf ghcr.io pushen
+  #         Läuft wenn:
+  #           - Basis-Image hat sich geändert (schedule)
+  #           - Dockerfile wurde geändert (push)
+  #           - Manuell ausgelöst (workflow_dispatch)
+  # ──────────────────────────────────────────────
+  build:
+    needs: check
+    if: >
+      needs.check.outputs.needs_build == 'true' ||
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: QEMU einrichten (für Multiarch-Build)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Docker Buildx einrichten
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login bei ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & Push (amd64, arm64, arm/v7)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./php-apache
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: true
+          tags: |
+            ghcr.io/daywalker91/php-apache:latest
+            ghcr.io/daywalker91/php-apache:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Digest in GitHub Variable speichern
+        run: |
+          DIGEST="${{ needs.check.outputs.current_digest }}"
+
+          # Versuche Update (PATCH) – falls Variable noch nicht existiert → Create (POST)
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X PATCH \
+            -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/variables/PHP_APACHE_DIGEST" \
+            -d "{\"name\":\"PHP_APACHE_DIGEST\",\"value\":\"${DIGEST}\"}")
+
+          if [ "$STATUS" = "404" ]; then
+            echo "Variable existiert noch nicht – wird erstellt..."
+            curl -s \
+              -X POST \
+              -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/variables" \
+              -d "{\"name\":\"PHP_APACHE_DIGEST\",\"value\":\"${DIGEST}\"}"
+          else
+            echo "Variable aktualisiert (HTTP $STATUS)"
+          fi
