@@ -76,7 +76,7 @@ def extract_url():
     output_filename = f"{uuid.uuid4()}.wav"
     output_path = os.path.join(AUDIO_OUTPUT_DIR, output_filename)
 
-try:
+    try:
         # Metadaten holen (Titel, Beschreibung) ohne Download
         meta_result = subprocess.run(
             ["yt-dlp", "--dump-json", "--no-playlist", url],
