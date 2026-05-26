@@ -63,7 +63,7 @@ def extract_local():
 
 # ─── POST /extract/url ────────────────────────────────────────────────────────
 # Erwartet: { "url": "https://youtube.com/watch?v=..." }
-# Gibt zurück: { "output": "/shared/audio/abc123.wav", "filename": "abc123.wav" }
+# Gibt zurück: { "output": "...", "filename": "...", "title": "...", "description": "...", "has_description": true/false }
 @app.route("/extract/url", methods=["POST"])
 def extract_url():
     data = request.get_json()
@@ -76,7 +76,20 @@ def extract_url():
     output_filename = f"{uuid.uuid4()}.wav"
     output_path = os.path.join(AUDIO_OUTPUT_DIR, output_filename)
 
-    try:
+try:
+        # Metadaten holen (Titel, Beschreibung) ohne Download
+        meta_result = subprocess.run(
+            ["yt-dlp", "--dump-json", "--no-playlist", url],
+            capture_output=True, text=True, timeout=60,
+        )
+        title = ""
+        description = ""
+        if meta_result.returncode == 0:
+            import json
+            meta = json.loads(meta_result.stdout)
+            title = meta.get("title", "")
+            description = meta.get("description", "")
+
         # Nur Audio herunterladen (-x Flag, kein Video)
         result = subprocess.run(
             [
@@ -113,7 +126,13 @@ def extract_url():
             return jsonify({"error": f"ffmpeg Konvertierung fehlgeschlagen: {error}"}), 500
 
         app.logger.info(f"url extract OK → {output_filename}")
-        return jsonify({"output": output_path, "filename": output_filename})
+        return jsonify({
+            "output": output_path,
+            "filename": output_filename,
+            "title": title,
+            "description": description,
+            "has_description": len(description) > 100  # >100 Zeichen = vermutlich nützlich
+        })
 
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Download Timeout (>10 Min.)"}), 504
