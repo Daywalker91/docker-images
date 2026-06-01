@@ -7,8 +7,9 @@ import threading
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
+log = logging.getLogger(__name__)
 
-# Konfiguration via Env-Variablen
+# Konfiguration via Env-Variablen (Defaults)
 WHISPER_MODEL     = os.environ.get("WHISPER_MODEL", "base")
 WHISPER_MODEL_DIR = os.environ.get("WHISPER_MODEL_DIR", "/models")
 WHISPER_BINARY    = os.environ.get("WHISPER_BINARY", "/usr/local/bin/whisper-cli")
@@ -16,152 +17,145 @@ WHISPER_BACKEND   = os.environ.get("WHISPER_BACKEND", "cpu")   # cpu | rknn
 WHISPER_THREADS   = os.environ.get("WHISPER_THREADS", "4")
 RKNN_MODEL_DIR    = os.environ.get("RKNN_MODEL_DIR", "/models/rknn")
 
-# Pfade
-CPU_MODEL_PATH    = os.path.join(WHISPER_MODEL_DIR, f"ggml-{WHISPER_MODEL}.bin")
-RKNN_ENCODER_PATH = os.path.join(RKNN_MODEL_DIR, f"whisper_encoder_{WHISPER_MODEL}_rk3588.rknn")
-RKNN_DECODER_PATH = os.path.join(RKNN_MODEL_DIR, f"whisper_decoder_{WHISPER_MODEL}_rk3588.rknn")
-
-# In-Memory Job-Store { job_id: { status, progress, transcript, language, model, backend, error } }
+# Jobs-Store
 jobs = {}
 jobs_lock = threading.Lock()
 
-# RKNN Modell-Instanz
+# RKNN Modell (einmalig geladen)
 rknn_model = None
 
 
-def set_job(job_id, **kwargs):
-    with jobs_lock:
-        jobs[job_id].update(kwargs)
+def get_cpu_model_path(model: str) -> str:
+    return os.path.join(WHISPER_MODEL_DIR, f"ggml-{model}.bin")
 
 
-def ensure_cpu_model():
-    if not os.path.exists(CPU_MODEL_PATH):
-        app.logger.info(f"CPU Modell nicht gefunden, starte Download: {CPU_MODEL_PATH}")
-        result = subprocess.run(["/app/download_model.sh"], capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"CPU Modell-Download fehlgeschlagen: {result.stderr}")
+def get_rknn_paths(model: str) -> tuple:
+    encoder = os.path.join(RKNN_MODEL_DIR, f"whisper-{model}-encoder.rknn")
+    decoder = os.path.join(RKNN_MODEL_DIR, f"whisper-{model}-decoder.rknn")
+    return encoder, decoder
 
 
-def ensure_rknn_models():
-    if not os.path.exists(RKNN_ENCODER_PATH) or not os.path.exists(RKNN_DECODER_PATH):
-        app.logger.info("RKNN Modelle nicht gefunden, starte Download...")
-        result = subprocess.run(
-            ["/app/download_rknn_models.sh"],
-            capture_output=True, text=True,
-            env={**os.environ, "WHISPER_MODEL": WHISPER_MODEL, "RKNN_MODEL_DIR": RKNN_MODEL_DIR}
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"RKNN Modell-Download fehlgeschlagen: {result.stderr}")
+def ensure_cpu_model(model: str):
+    """CPU-Modell herunterladen falls nicht vorhanden."""
+    model_path = get_cpu_model_path(model)
+    if not os.path.exists(model_path):
+        log.info(f"Modell nicht gefunden, starte Download: {model_path}")
+        subprocess.run(["/usr/local/bin/download_model.sh"], env={
+            **os.environ,
+            "WHISPER_MODEL": model,
+            "WHISPER_MODEL_DIR": WHISPER_MODEL_DIR,
+        }, check=True)
 
 
-def load_rknn_model():
+def ensure_rknn_models(model: str):
+    """RKNN-Modelle herunterladen falls nicht vorhanden."""
+    encoder, decoder = get_rknn_paths(model)
+    if not os.path.exists(encoder) or not os.path.exists(decoder):
+        log.info(f"RKNN-Modelle nicht gefunden, starte Download...")
+        subprocess.run(["/usr/local/bin/download_rknn_models.sh"], env={
+            **os.environ,
+            "WHISPER_MODEL": model,
+            "RKNN_MODEL_DIR": RKNN_MODEL_DIR,
+        }, check=True)
+
+
+def load_rknn_model(model: str):
+    """RKNN-Modell laden (einmalig)."""
     global rknn_model
-    from rknn_inference import WhisperRKNN
-    ensure_rknn_models()
-    rknn_model = WhisperRKNN(
-        encoder_path=RKNN_ENCODER_PATH,
-        decoder_path=RKNN_DECODER_PATH,
-        model_size=WHISPER_MODEL,
-    )
+    if rknn_model is None:
+        from rknn_inference import WhisperRKNN
+        encoder, decoder = get_rknn_paths(model)
+        rknn_model = WhisperRKNN(encoder, decoder, model_size=model)
+    return rknn_model
 
 
-def worker_transcribe(job_id: str, audio_path: str, language: str,
-                      model: str, backend: str):
-    """Background-Worker für Transkription (CPU oder RKNN)."""
+def worker_transcribe(job_id: str, audio_path: str, backend: str, model: str):
+    """Hintergrund-Worker für Transkription."""
+    with jobs_lock:
+        jobs[job_id]["status"] = "processing"
+        jobs[job_id]["progress"] = 10
+
     try:
-        set_job(job_id, status="processing", progress=10)
-
         if backend == "rknn":
-            # ── RKNN Backend (NPU) ─────────────────────────────────────────
-            if rknn_model is None:
-                set_job(job_id, status="error", progress=0, error="RKNN Modell nicht geladen")
-                return
-            transcript = rknn_model.transcribe(audio_path, language=language)
-
+            # RKNN-Backend (NPU)
+            ensure_rknn_models(model)
+            with jobs_lock:
+                jobs[job_id]["progress"] = 30
+            rknn = load_rknn_model(model)
+            with jobs_lock:
+                jobs[job_id]["progress"] = 50
+            transcript = rknn.transcribe(audio_path)
         else:
-            # ── CPU Backend (whisper-cli) ───────────────────────────────────
-            output_base = audio_path.replace(".wav", "")
-            cmd = [
+            # CPU-Backend (whisper.cpp)
+            ensure_cpu_model(model)
+            with jobs_lock:
+                jobs[job_id]["progress"] = 30
+            result = subprocess.run([
                 WHISPER_BINARY,
-                "-m", CPU_MODEL_PATH,
+                "-m", get_cpu_model_path(model),
                 "-f", audio_path,
                 "-t", WHISPER_THREADS,
                 "--output-txt",
-                "--output-file", output_base,
-                "--no-prints",
-            ]
-            if language != "auto":
-                cmd += ["-l", language]
+                "--no-timestamps",
+                "-l", "auto",
+            ], capture_output=True, text=True, check=True)
+            transcript = result.stdout.strip()
 
-            set_job(job_id, status="processing", progress=30)
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        with jobs_lock:
+            jobs[job_id]["status"]     = "done"
+            jobs[job_id]["progress"]   = 100
+            jobs[job_id]["transcript"] = transcript
 
-            if result.returncode != 0:
-                set_job(job_id, status="error", progress=0,
-                        error=f"whisper fehlgeschlagen: {result.stderr}")
-                return
+        log.info(f"Job {job_id} abgeschlossen ({backend})")
 
-            transcript_path = output_base + ".txt"
-            if not os.path.exists(transcript_path):
-                set_job(job_id, status="error", progress=0, error="Keine Ausgabedatei erzeugt")
-                return
-
-            with open(transcript_path, "r", encoding="utf-8") as f:
-                transcript = f.read().strip()
-            os.remove(transcript_path)
-
-        set_job(job_id, status="done", progress=100,
-                transcript=transcript,
-                language=language,
-                model=model,
-                backend=backend)
-        app.logger.info(f"[{job_id}] transcribe done ({backend}): {len(transcript)} Zeichen")
-
-    except subprocess.TimeoutExpired:
-        set_job(job_id, status="error", progress=0, error="Timeout (>10 Min.)")
     except Exception as e:
-        set_job(job_id, status="error", progress=0, error=str(e))
-
-
-# ── Backend beim Start initialisieren ─────────────────────────────────────────
-app.logger.info(f"Backend: {WHISPER_BACKEND} | Modell: {WHISPER_MODEL}")
-try:
-    if WHISPER_BACKEND == "rknn":
-        load_rknn_model()
-    else:
-        ensure_cpu_model()
-except Exception as e:
-    app.logger.error(f"Fehler beim Start: {e}")
+        log.error(f"Job {job_id} fehlgeschlagen: {e}")
+        with jobs_lock:
+            jobs[job_id]["status"] = "error"
+            jobs[job_id]["error"]  = str(e)
 
 
 # ─── POST /transcribe ─────────────────────────────────────────────────────────
-# Erwartet: { "audio_path": "/shared/audio/abc123.wav", "language": "de",
-#             "model": "base", "backend": "whisper_cpp" }
-# Gibt zurück: { "job_id": "xyz789", "status": "queued" }
+# Parameter:
+#   audio_path  (required) – Pfad zur WAV-Datei auf dem Shared Volume
+#   backend     (optional) – "cpu" oder "rknn" – überschreibt Env-Variable
+#   model       (optional) – "tiny|base|small|medium" – überschreibt Env-Variable
 @app.route("/transcribe", methods=["POST"])
 def transcribe():
-    data = request.get_json()
-    if not data or "audio_path" not in data:
-        return jsonify({"error": "Parameter 'audio_path' fehlt"}), 400
+    data = request.get_json(silent=True) or {}
 
-    audio_path = data["audio_path"]
-    language   = data.get("language", "auto")
-    model      = data.get("model", WHISPER_MODEL)
-    backend    = data.get("backend", WHISPER_BACKEND)
-
+    audio_path = data.get("audio_path")
+    if not audio_path:
+        return jsonify({"error": "audio_path fehlt"}), 400
     if not os.path.exists(audio_path):
-        return jsonify({"error": f"Audio-Datei nicht gefunden: {audio_path}"}), 404
+        return jsonify({"error": f"Datei nicht gefunden: {audio_path}"}), 400
+
+    # Request-Parameter haben Vorrang vor Env-Variable
+    backend = data.get("backend", WHISPER_BACKEND)
+    model   = data.get("model",   WHISPER_MODEL)
+
+    if backend not in ("cpu", "rknn"):
+        return jsonify({"error": f"Ungültiges Backend: {backend}"}), 400
+    if model not in ("tiny", "base", "small", "medium"):
+        return jsonify({"error": f"Ungültiges Modell: {model}"}), 400
 
     job_id = str(uuid.uuid4())
     with jobs_lock:
-        jobs[job_id] = {"status": "queued", "progress": 0}
+        jobs[job_id] = {
+            "status":   "queued",
+            "progress": 0,
+            "backend":  backend,
+            "model":    model,
+        }
 
-    threading.Thread(
+    thread = threading.Thread(
         target=worker_transcribe,
-        args=(job_id, audio_path, language, model, backend),
-        daemon=True
-    ).start()
+        args=(job_id, audio_path, backend, model),
+        daemon=True,
+    )
+    thread.start()
 
+    log.info(f"Job {job_id} gestartet – backend={backend}, model={model}")
     return jsonify({"job_id": job_id, "status": "queued"})
 
 
@@ -169,8 +163,7 @@ def transcribe():
 # Gibt zurück: { "status": "queued|processing|done|error",
 #                "progress": 0-100,
 #                "transcript": "...",  ← nur wenn done
-#                "language": "de",
-#                "model": "base",
+#                "backend": "cpu|rknn",
 #                "error": "..." }      ← nur wenn error
 @app.route("/job/<job_id>", methods=["GET"])
 def job_status(job_id):
@@ -184,18 +177,24 @@ def job_status(job_id):
 # ─── GET /health ──────────────────────────────────────────────────────────────
 @app.route("/health", methods=["GET"])
 def health():
-    if WHISPER_BACKEND == "rknn":
-        model_ok = rknn_model is not None
-    else:
-        model_ok = os.path.exists(CPU_MODEL_PATH)
+    cpu_ok  = os.path.exists(get_cpu_model_path(WHISPER_MODEL))
+    rknn_ok = rknn_model is not None
 
     return jsonify({
-        "status":       "ok" if model_ok else "degraded",
-        "model":        WHISPER_MODEL,
-        "model_loaded": model_ok,
-        "backend":      WHISPER_BACKEND,
+        "status":        "ok",
+        "default_backend": WHISPER_BACKEND,
+        "default_model":   WHISPER_MODEL,
+        "cpu_model_ready": cpu_ok,
+        "rknn_model_ready": rknn_ok,
     })
 
 
 if __name__ == "__main__":
+    # Beim Start: Default-Modell vorladen
+    if WHISPER_BACKEND == "cpu":
+        ensure_cpu_model(WHISPER_MODEL)
+    elif WHISPER_BACKEND == "rknn":
+        ensure_rknn_models(WHISPER_MODEL)
+        load_rknn_model(WHISPER_MODEL)
+
     app.run(host="0.0.0.0", port=5001)
