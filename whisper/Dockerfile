@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/bin/whisper-cli /usr/local/bin/whisper-cli
-RUN chmod +x /usr/local/bin/whisper-cli
+RUN chmod +x /usr/local/bin/whisper-cli && whisper-cli --help || echo "FEHLER: Binary nicht funktionsfähig"
 
 # rknnlite nur auf arm64 – separates Script um Shell-Expansion-Probleme zu vermeiden
 COPY install_rknnlite.sh /tmp/install_rknnlite.sh
