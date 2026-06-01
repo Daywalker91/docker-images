@@ -14,7 +14,7 @@ WORKDIR /whisper.cpp
 RUN cmake -B build \
     -DCMAKE_BUILD_TYPE=Release \
     -DGGML_NATIVE=OFF \
-    -DCMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++ -Wl,-Bstatic -lgomp -Wl,-Bdynamic" \
+    -DBUILD_SHARED_LIBS=OFF \
     && cmake --build build --config Release -j$(nproc)
     
 RUN cp build/bin/whisper-cli /usr/local/bin/whisper-cli 2>/dev/null || \
@@ -32,6 +32,7 @@ LABEL org.opencontainers.image.licenses="MIT"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     ca-certificates \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/bin/whisper-cli /usr/local/bin/whisper-cli
