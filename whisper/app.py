@@ -41,7 +41,7 @@ def ensure_cpu_model(model: str):
     model_path = get_cpu_model_path(model)
     if not os.path.exists(model_path):
         log.info(f"Modell nicht gefunden, starte Download: {model_path}")
-        subprocess.run(["/usr/local/bin/download_model.sh"], env={
+        subprocess.run(["/app/download_model.sh"], env={
             **os.environ,
             "WHISPER_MODEL":     model,
             "WHISPER_MODEL_DIR": WHISPER_MODEL_DIR,
@@ -51,7 +51,7 @@ def ensure_rknn_models(model: str):
     encoder, decoder = get_rknn_paths(model)
     if not os.path.exists(encoder) or not os.path.exists(decoder):
         log.info("RKNN-Modelle nicht gefunden, starte Download...")
-        subprocess.run(["/usr/local/bin/download_rknn_models.sh"], env={
+        subprocess.run(["/app/download_rknn_models.sh"], env={
             **os.environ,
             "WHISPER_MODEL":  model,
             "RKNN_MODEL_DIR": RKNN_MODEL_DIR,
