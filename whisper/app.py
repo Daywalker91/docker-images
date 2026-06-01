@@ -11,11 +11,11 @@ log = logging.getLogger("app")
 logging.basicConfig(level=logging.INFO, format="INFO:%(name)s:%(message)s")
 
 # ── Konfiguration via Env ──────────────────────────────────────────────────────
-WHISPER_BACKEND   = os.environ.get("WHISPER_BACKEND",   "cpu")   # cpu | rknn
-WHISPER_MODEL     = os.environ.get("WHISPER_MODEL",     "base")  # tiny|base|small|medium
+WHISPER_BACKEND   = os.environ.get("WHISPER_BACKEND",   "cpu")
+WHISPER_MODEL     = os.environ.get("WHISPER_MODEL",     "base")
 WHISPER_MODEL_DIR = os.environ.get("WHISPER_MODEL_DIR", "/models")
 RKNN_MODEL_DIR    = os.environ.get("RKNN_MODEL_DIR",    "/models/rknn")
-WHISPER_BINARY    = os.environ.get("WHISPER_BINARY",    "/usr/local/bin/whisper")
+WHISPER_BINARY    = os.environ.get("WHISPER_BINARY",    "/usr/local/bin/whisper-cli")
 WHISPER_THREADS   = os.environ.get("WHISPER_THREADS",   "4")
 
 # ── Job-Store ──────────────────────────────────────────────────────────────────
@@ -99,10 +99,6 @@ def worker_transcribe(job_id: str, audio_path: str, backend: str, model: str):
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
-# POST /transcribe
-# Body: { "audio_path": "/shared/audio/abc.wav", "language": "de",
-#         "model": "base", "backend": "cpu" }
-# Antwort: { "job_id": "xyz", "status": "queued" }
 @app.route("/transcribe", methods=["POST"])
 def transcribe():
     data = request.get_json(silent=True) or {}
@@ -133,11 +129,6 @@ def transcribe():
     return jsonify({"job_id": job_id, "status": "queued"})
 
 
-# GET /job/<job_id>
-# Antwort: { "status": "queued|processing|done|error", "progress": 0-100,
-#             "transcript": "...",  ← nur wenn done
-#             "model": "base", "backend": "cpu",
-#             "error": "..." }      ← nur wenn error
 @app.route("/job/<job_id>", methods=["GET"])
 def job_status(job_id):
     with jobs_lock:
@@ -147,7 +138,6 @@ def job_status(job_id):
     return jsonify(job)
 
 
-# GET /health
 @app.route("/health", methods=["GET"])
 def health():
     if WHISPER_BACKEND == "rknn":
