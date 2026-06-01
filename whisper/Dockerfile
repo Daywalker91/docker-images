@@ -6,7 +6,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     git \
     ca-certificates \
-    libgomp-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN git clone --depth=1 https://github.com/ggerganov/whisper.cpp /whisper.cpp
@@ -15,7 +14,7 @@ WORKDIR /whisper.cpp
 RUN cmake -B build \
     -DCMAKE_BUILD_TYPE=Release \
     -DGGML_NATIVE=OFF \
-    -DCMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++ -static-openmp" \
+    -DCMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++ -Wl,-Bstatic -lgomp -Wl,-Bdynamic" \
     && cmake --build build --config Release -j$(nproc)
     
 RUN cp build/bin/whisper-cli /usr/local/bin/whisper-cli 2>/dev/null || \
