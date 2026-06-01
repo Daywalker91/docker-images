@@ -14,6 +14,7 @@ WORKDIR /whisper.cpp
 RUN cmake -B build \
     -DCMAKE_BUILD_TYPE=Release \
     -DGGML_NATIVE=OFF \
+    -DBUILD_SHARED_LIBS=OFF \
     && cmake --build build --config Release -j$(nproc)
 
 RUN cp build/bin/whisper-cli /usr/local/bin/whisper-cli 2>/dev/null || \
