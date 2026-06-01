@@ -1,7 +1,9 @@
 from flask import Flask, request, jsonify
 import subprocess
 import os
+import uuid
 import logging
+import threading
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -19,8 +21,17 @@ CPU_MODEL_PATH    = os.path.join(WHISPER_MODEL_DIR, f"ggml-{WHISPER_MODEL}.bin")
 RKNN_ENCODER_PATH = os.path.join(RKNN_MODEL_DIR, f"whisper_encoder_{WHISPER_MODEL}_rk3588.rknn")
 RKNN_DECODER_PATH = os.path.join(RKNN_MODEL_DIR, f"whisper_decoder_{WHISPER_MODEL}_rk3588.rknn")
 
-# RKNN Modell-Instanz (nur wenn Backend=rknn)
+# In-Memory Job-Store { job_id: { status, progress, transcript, language, model, backend, error } }
+jobs = {}
+jobs_lock = threading.Lock()
+
+# RKNN Modell-Instanz
 rknn_model = None
+
+
+def set_job(job_id, **kwargs):
+    with jobs_lock:
+        jobs[job_id].update(kwargs)
 
 
 def ensure_cpu_model():
@@ -54,46 +65,22 @@ def load_rknn_model():
     )
 
 
-# ── Backend beim Start initialisieren ─────────────────────────────────────────
-app.logger.info(f"Backend: {WHISPER_BACKEND} | Modell: {WHISPER_MODEL}")
-
-try:
-    if WHISPER_BACKEND == "rknn":
-        load_rknn_model()
-    else:
-        ensure_cpu_model()
-except Exception as e:
-    app.logger.error(f"Fehler beim Start: {e}")
-
-
-# ─── POST /transcribe ─────────────────────────────────────────────────────────
-# Erwartet: { "audio": "/shared/audio/abc123.wav", "language": "de" }
-# Gibt zurück: { "transcript": "...", "language": "de", "model": "base", "backend": "cpu" }
-@app.route("/transcribe", methods=["POST"])
-def transcribe():
-    data = request.get_json()
-
-    if not data or "audio" not in data:
-        return jsonify({"error": "Parameter 'audio' fehlt"}), 400
-
-    audio_path = data["audio"]
-    language   = data.get("language", "auto")
-
-    if not os.path.exists(audio_path):
-        return jsonify({"error": f"Audio-Datei nicht gefunden: {audio_path}"}), 404
-
+def worker_transcribe(job_id: str, audio_path: str, language: str,
+                      model: str, backend: str):
+    """Background-Worker für Transkription (CPU oder RKNN)."""
     try:
-        if WHISPER_BACKEND == "rknn":
+        set_job(job_id, status="processing", progress=10)
+
+        if backend == "rknn":
             # ── RKNN Backend (NPU) ─────────────────────────────────────────
             if rknn_model is None:
-                return jsonify({"error": "RKNN Modell nicht geladen"}), 503
-
+                set_job(job_id, status="error", progress=0, error="RKNN Modell nicht geladen")
+                return
             transcript = rknn_model.transcribe(audio_path, language=language)
 
         else:
             # ── CPU Backend (whisper-cli) ───────────────────────────────────
             output_base = audio_path.replace(".wav", "")
-
             cmd = [
                 WHISPER_BINARY,
                 "-m", CPU_MODEL_PATH,
@@ -106,31 +93,92 @@ def transcribe():
             if language != "auto":
                 cmd += ["-l", language]
 
+            set_job(job_id, status="processing", progress=30)
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
 
             if result.returncode != 0:
-                return jsonify({"error": f"whisper fehlgeschlagen: {result.stderr}"}), 500
+                set_job(job_id, status="error", progress=0,
+                        error=f"whisper fehlgeschlagen: {result.stderr}")
+                return
 
             transcript_path = output_base + ".txt"
             if not os.path.exists(transcript_path):
-                return jsonify({"error": "Keine Ausgabedatei erzeugt"}), 500
+                set_job(job_id, status="error", progress=0, error="Keine Ausgabedatei erzeugt")
+                return
 
             with open(transcript_path, "r", encoding="utf-8") as f:
                 transcript = f.read().strip()
             os.remove(transcript_path)
 
-        app.logger.info(f"Transkription OK ({WHISPER_BACKEND}): {len(transcript)} Zeichen")
-        return jsonify({
-            "transcript": transcript,
-            "language":   language,
-            "model":      WHISPER_MODEL,
-            "backend":    WHISPER_BACKEND,
-        })
+        set_job(job_id, status="done", progress=100,
+                transcript=transcript,
+                language=language,
+                model=model,
+                backend=backend)
+        app.logger.info(f"[{job_id}] transcribe done ({backend}): {len(transcript)} Zeichen")
 
     except subprocess.TimeoutExpired:
-        return jsonify({"error": "Transkription Timeout (>10 Min.)"}), 504
+        set_job(job_id, status="error", progress=0, error="Timeout (>10 Min.)")
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        set_job(job_id, status="error", progress=0, error=str(e))
+
+
+# ── Backend beim Start initialisieren ─────────────────────────────────────────
+app.logger.info(f"Backend: {WHISPER_BACKEND} | Modell: {WHISPER_MODEL}")
+try:
+    if WHISPER_BACKEND == "rknn":
+        load_rknn_model()
+    else:
+        ensure_cpu_model()
+except Exception as e:
+    app.logger.error(f"Fehler beim Start: {e}")
+
+
+# ─── POST /transcribe ─────────────────────────────────────────────────────────
+# Erwartet: { "audio_path": "/shared/audio/abc123.wav", "language": "de",
+#             "model": "base", "backend": "whisper_cpp" }
+# Gibt zurück: { "job_id": "xyz789", "status": "queued" }
+@app.route("/transcribe", methods=["POST"])
+def transcribe():
+    data = request.get_json()
+    if not data or "audio_path" not in data:
+        return jsonify({"error": "Parameter 'audio_path' fehlt"}), 400
+
+    audio_path = data["audio_path"]
+    language   = data.get("language", "auto")
+    model      = data.get("model", WHISPER_MODEL)
+    backend    = data.get("backend", WHISPER_BACKEND)
+
+    if not os.path.exists(audio_path):
+        return jsonify({"error": f"Audio-Datei nicht gefunden: {audio_path}"}), 404
+
+    job_id = str(uuid.uuid4())
+    with jobs_lock:
+        jobs[job_id] = {"status": "queued", "progress": 0}
+
+    threading.Thread(
+        target=worker_transcribe,
+        args=(job_id, audio_path, language, model, backend),
+        daemon=True
+    ).start()
+
+    return jsonify({"job_id": job_id, "status": "queued"})
+
+
+# ─── GET /job/<job_id> ────────────────────────────────────────────────────────
+# Gibt zurück: { "status": "queued|processing|done|error",
+#                "progress": 0-100,
+#                "transcript": "...",  ← nur wenn done
+#                "language": "de",
+#                "model": "base",
+#                "error": "..." }      ← nur wenn error
+@app.route("/job/<job_id>", methods=["GET"])
+def job_status(job_id):
+    with jobs_lock:
+        job = jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job nicht gefunden"}), 404
+    return jsonify(job)
 
 
 # ─── GET /health ──────────────────────────────────────────────────────────────
