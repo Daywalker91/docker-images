@@ -17,7 +17,8 @@ RUN cmake -B build \
     && cmake --build build --config Release -j$(nproc)
 
 RUN cp build/bin/whisper-cli /usr/local/bin/whisper-cli 2>/dev/null || \
-    cp build/bin/main /usr/local/bin/whisper-cli
+    cp build/bin/main /usr/local/bin/whisper-cli 2>/dev/null || \
+    (echo "FEHLER: whisper-cli Binary nicht gefunden!" && find /whisper.cpp/build -type f -name "whisper*" -o -name "main" && exit 1)
 
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
