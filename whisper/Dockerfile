@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     git \
     ca-certificates \
+    libgomp-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN git clone --depth=1 https://github.com/ggerganov/whisper.cpp /whisper.cpp
