@@ -21,8 +21,14 @@ RUN VERSION_CLEAN=$(echo ${RKLLM_VERSION} | sed 's/^v//') && \
     tar -xzf /tmp/rknn-llm.tar.gz -C /tmp && \
     # aarch64 Library in Systempfad kopieren
     cp /tmp/rknn-llm-${VERSION_CLEAN}/rkllm-runtime/Linux/librkllm_api/aarch64/librkllmrt.so /usr/lib/ && \
-    ldconfig && \
     rm -rf /tmp/rknn-llm* /tmp/rknn-llm.tar.gz
+
+# RKNN Runtime Library – öffnet den NPU via /dev/dri/renderD129
+# Wird von librkllmrt.so intern benötigt
+RUN wget -q "https://github.com/rockchip-linux/rknpu2/raw/master/runtime/Linux/librknn_api/aarch64/librknnrt.so" \
+         -O /usr/lib/librknnrt.so && \
+    chmod 755 /usr/lib/librknnrt.so && \
+    ldconfig
 
 WORKDIR /app
 
