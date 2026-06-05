@@ -25,7 +25,7 @@ RUN VERSION_CLEAN=$(echo ${RKLLM_VERSION} | sed 's/^v//') && \
 
 # RKNN Runtime Library – öffnet den NPU via /dev/dri/renderD129
 # Wird von librkllmrt.so intern benötigt
-RUN wget -q "https://github.com/airockchip/rknn-toolkit2/raw/master/rknpu2/runtime/Linux/librknn_api/aarch64/librknnrt.so" \
+RUN wget -q "https://github.com/rockchip-linux/rknpu2/raw/master/runtime/Linux/librknn_api/aarch64/librknnrt.so" \
          -O /usr/lib/librknnrt.so && \
     chmod 755 /usr/lib/librknnrt.so && \
     ldconfig
@@ -35,11 +35,11 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py rkllm_wrapper.py download_model.sh ./
-RUN chmod +x download_model.sh
+COPY app.py rkllm_wrapper.py download_model.sh entrypoint.sh ./
+RUN chmod +x download_model.sh entrypoint.sh
 
 RUN mkdir -p /models /shared
 
 EXPOSE 5002
 
-CMD ["python", "app.py"]
+CMD ["/app/entrypoint.sh"]
