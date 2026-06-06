@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # RKNN Runtime Library – aus rknn-llm tar.gz (gleicher Ansatz wie rkllm Container)
 ARG RKLLM_VERSION=v1.2.1
 RUN VERSION_CLEAN=$(echo ${RKLLM_VERSION} | sed 's/^v//') && \
-    wget -q "https://github.com/airockchip/rknn-llm/archive/refs/tags/${RKLLM_VERSION}.tar.gz" \
+    wget -q "https://github.com/airockchip/rknn-llm/archive/refs/tags/release-${RKLLM_VERSION}.tar.gz" \
          -O /tmp/rknn-llm.tar.gz && \
     tar -xzf /tmp/rknn-llm.tar.gz -C /tmp && \
     cp /tmp/rknn-llm-${VERSION_CLEAN}/rkllm-runtime/Linux/librkllm_api/aarch64/librknnrt.so /usr/lib/ && \
