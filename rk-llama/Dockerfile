@@ -17,15 +17,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # RKNN Runtime Library – aus rknn-llm tar.gz (gleicher Ansatz wie rkllm Container)
-ARG RKLLM_VERSION=v1.2.1
-RUN VERSION_CLEAN=$(echo ${RKLLM_VERSION} | sed 's/^v//') && \
-    wget -q "https://github.com/airockchip/rknn-llm/archive/refs/tags/release-${RKLLM_VERSION}.tar.gz" \
+# Tag-Format: release-v1.2.3 → Ordner: rknn-llm-release-v1.2.3
+ARG RKLLM_VERSION=release-v1.2.3
+RUN wget -q "https://github.com/airockchip/rknn-llm/archive/refs/tags/${RKLLM_VERSION}.tar.gz" \
          -O /tmp/rknn-llm.tar.gz && \
     tar -xzf /tmp/rknn-llm.tar.gz -C /tmp && \
-    cp /tmp/rknn-llm-${VERSION_CLEAN}/rkllm-runtime/Linux/librkllm_api/aarch64/librknnrt.so /usr/lib/ && \
+    cp /tmp/rknn-llm-${RKLLM_VERSION}/rkllm-runtime/Linux/librkllm_api/aarch64/librknnrt.so /usr/lib/ && \
     chmod 755 /usr/lib/librknnrt.so && \
     ldconfig && \
-    rm -rf /tmp/rknn-llm.tar.gz /tmp/rknn-llm-${VERSION_CLEAN}
+    rm -rf /tmp/rknn-llm.tar.gz /tmp/rknn-llm-${RKLLM_VERSION}
 
 # rk-llama.cpp klonen (rknpu2 Branch) – rknn_api.h ist im Repo enthalten
 RUN git clone --depth=1 --branch rknpu2 \
@@ -58,15 +58,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # RKNN Runtime Library – aus rknn-llm tar.gz
-ARG RKLLM_VERSION=v1.2.1
-RUN VERSION_CLEAN=$(echo ${RKLLM_VERSION} | sed 's/^v//') && \
-    wget -q "https://github.com/airockchip/rknn-llm/archive/refs/tags/${RKLLM_VERSION}.tar.gz" \
+ARG RKLLM_VERSION=release-v1.2.3
+RUN wget -q "https://github.com/airockchip/rknn-llm/archive/refs/tags/${RKLLM_VERSION}.tar.gz" \
          -O /tmp/rknn-llm.tar.gz && \
     tar -xzf /tmp/rknn-llm.tar.gz -C /tmp && \
-    cp /tmp/rknn-llm-${VERSION_CLEAN}/rkllm-runtime/Linux/librkllm_api/aarch64/librknnrt.so /usr/lib/ && \
+    cp /tmp/rknn-llm-${RKLLM_VERSION}/rkllm-runtime/Linux/librkllm_api/aarch64/librknnrt.so /usr/lib/ && \
     chmod 755 /usr/lib/librknnrt.so && \
     ldconfig && \
-    rm -rf /tmp/rknn-llm.tar.gz /tmp/rknn-llm-${VERSION_CLEAN}
+    rm -rf /tmp/rknn-llm.tar.gz /tmp/rknn-llm-${RKLLM_VERSION}
 
 # llama-server Binary aus Build-Stage
 COPY --from=builder /build/build/bin/llama-server /usr/local/bin/llama-server
