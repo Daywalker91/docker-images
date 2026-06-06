@@ -8,7 +8,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     git \
-    wget \
     ca-certificates \
     pkg-config \
     libgomp1 \
@@ -16,13 +15,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgcc-s1 \
     && rm -rf /var/lib/apt/lists/*
 
-# RKNN Runtime Library – wird zum Kompilieren UND Linken benötigt
-RUN wget -q "https://github.com/airockchip/rknn-toolkit2/raw/master/rknpu2/runtime/Linux/librknn_api/aarch64/librknnrt.so" \
-         -O /usr/lib/librknnrt.so && \
-    wget -q "https://github.com/airockchip/rknn-toolkit2/raw/master/rknpu2/runtime/Linux/librknn_api/aarch64/rknn_api.h" \
-         -O /usr/include/rknn_api.h && \
+# RKNN Runtime Library + Header – via git sparse-checkout (wget aus CI blockiert)
+RUN git clone --depth=1 --filter=blob:none --sparse \
+    https://github.com/airockchip/rknn-toolkit2.git /tmp/rknn-tk2 && \
+    cd /tmp/rknn-tk2 && \
+    git sparse-checkout set rknpu2/runtime/Linux/librknn_api/aarch64 && \
+    cp rknpu2/runtime/Linux/librknn_api/aarch64/librknnrt.so /usr/lib/ && \
+    cp rknpu2/runtime/Linux/librknn_api/aarch64/rknn_api.h /usr/include/ && \
     chmod 755 /usr/lib/librknnrt.so && \
-    ldconfig
+    ldconfig && \
+    rm -rf /tmp/rknn-tk2
 
 # rk-llama.cpp klonen (rknpu2 Branch)
 RUN git clone --depth=1 --branch rknpu2 \
@@ -50,15 +52,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     libstdc++6 \
     libgcc-s1 \
-    wget \
+    git \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# RKNN Runtime Library
-RUN wget -q "https://github.com/airockchip/rknn-toolkit2/raw/master/rknpu2/runtime/Linux/librknn_api/aarch64/librknnrt.so" \
-         -O /usr/lib/librknnrt.so && \
+# RKNN Runtime Library – via git sparse-checkout
+RUN git clone --depth=1 --filter=blob:none --sparse \
+    https://github.com/airockchip/rknn-toolkit2.git /tmp/rknn-tk2 && \
+    cd /tmp/rknn-tk2 && \
+    git sparse-checkout set rknpu2/runtime/Linux/librknn_api/aarch64 && \
+    cp rknpu2/runtime/Linux/librknn_api/aarch64/librknnrt.so /usr/lib/ && \
     chmod 755 /usr/lib/librknnrt.so && \
-    ldconfig
+    ldconfig && \
+    rm -rf /tmp/rknn-tk2
 
 # llama-server Binary aus Build-Stage
 COPY --from=builder /build/build/bin/llama-server /usr/local/bin/llama-server
