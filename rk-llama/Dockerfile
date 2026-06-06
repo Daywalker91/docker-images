@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     git \
+    wget \
     ca-certificates \
     pkg-config \
     libgomp1 \
@@ -15,18 +16,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgcc-s1 \
     && rm -rf /var/lib/apt/lists/*
 
-# RKNN Runtime Library + Header – via git sparse-checkout (wget aus CI blockiert)
-RUN git clone --depth=1 --filter=blob:none --sparse \
-    https://github.com/airockchip/rknn-toolkit2.git /tmp/rknn-tk2 && \
-    cd /tmp/rknn-tk2 && \
-    git sparse-checkout set rknpu2/runtime/Linux/librknn_api/aarch64 && \
-    cp rknpu2/runtime/Linux/librknn_api/aarch64/librknnrt.so /usr/lib/ && \
-    cp rknpu2/runtime/Linux/librknn_api/aarch64/rknn_api.h /usr/include/ && \
+# RKNN Runtime Library – aus rknn-llm tar.gz (gleicher Ansatz wie rkllm Container)
+ARG RKLLM_VERSION=v1.2.1
+RUN VERSION_CLEAN=$(echo ${RKLLM_VERSION} | sed 's/^v//') && \
+    wget -q "https://github.com/airockchip/rknn-llm/archive/refs/tags/${RKLLM_VERSION}.tar.gz" \
+         -O /tmp/rknn-llm.tar.gz && \
+    tar -xzf /tmp/rknn-llm.tar.gz -C /tmp && \
+    cp /tmp/rknn-llm-${VERSION_CLEAN}/rkllm-runtime/Linux/librkllm_api/aarch64/librknnrt.so /usr/lib/ && \
     chmod 755 /usr/lib/librknnrt.so && \
     ldconfig && \
-    rm -rf /tmp/rknn-tk2
+    rm -rf /tmp/rknn-llm.tar.gz /tmp/rknn-llm-${VERSION_CLEAN}
 
-# rk-llama.cpp klonen (rknpu2 Branch)
+# rk-llama.cpp klonen (rknpu2 Branch) – rknn_api.h ist im Repo enthalten
 RUN git clone --depth=1 --branch rknpu2 \
     https://github.com/invisiofficial/rk-llama.cpp.git /build
 
@@ -52,19 +53,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     libstdc++6 \
     libgcc-s1 \
-    git \
+    wget \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# RKNN Runtime Library – via git sparse-checkout
-RUN git clone --depth=1 --filter=blob:none --sparse \
-    https://github.com/airockchip/rknn-toolkit2.git /tmp/rknn-tk2 && \
-    cd /tmp/rknn-tk2 && \
-    git sparse-checkout set rknpu2/runtime/Linux/librknn_api/aarch64 && \
-    cp rknpu2/runtime/Linux/librknn_api/aarch64/librknnrt.so /usr/lib/ && \
+# RKNN Runtime Library – aus rknn-llm tar.gz
+ARG RKLLM_VERSION=v1.2.1
+RUN VERSION_CLEAN=$(echo ${RKLLM_VERSION} | sed 's/^v//') && \
+    wget -q "https://github.com/airockchip/rknn-llm/archive/refs/tags/${RKLLM_VERSION}.tar.gz" \
+         -O /tmp/rknn-llm.tar.gz && \
+    tar -xzf /tmp/rknn-llm.tar.gz -C /tmp && \
+    cp /tmp/rknn-llm-${VERSION_CLEAN}/rkllm-runtime/Linux/librkllm_api/aarch64/librknnrt.so /usr/lib/ && \
     chmod 755 /usr/lib/librknnrt.so && \
     ldconfig && \
-    rm -rf /tmp/rknn-tk2
+    rm -rf /tmp/rknn-llm.tar.gz /tmp/rknn-llm-${VERSION_CLEAN}
 
 # llama-server Binary aus Build-Stage
 COPY --from=builder /build/build/bin/llama-server /usr/local/bin/llama-server
