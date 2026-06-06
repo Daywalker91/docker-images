@@ -1,4 +1,4 @@
-name: Build & Push rk-llama
+name: Build rk-llama
 
 on:
   workflow_dispatch:
