@@ -22,7 +22,7 @@ ARG RKLLM_VERSION=release-v1.2.3
 RUN wget -q "https://github.com/airockchip/rknn-llm/archive/refs/tags/${RKLLM_VERSION}.tar.gz" \
          -O /tmp/rknn-llm.tar.gz && \
     tar -xzf /tmp/rknn-llm.tar.gz -C /tmp && \
-    cp /tmp/rknn-llm-${RKLLM_VERSION}/rkllm-runtime/Linux/librkllm_api/aarch64/librknnrt.so /usr/lib/ && \
+    cp /tmp/rknn-llm-${RKLLM_VERSION}/examples/multimodal_model_demo/deploy/3rdparty/librknnrt/Linux/librknn_api/aarch64/librknnrt.so /usr/lib/ && \
     chmod 755 /usr/lib/librknnrt.so && \
     ldconfig && \
     rm -rf /tmp/rknn-llm.tar.gz /tmp/rknn-llm-${RKLLM_VERSION}
@@ -62,7 +62,7 @@ ARG RKLLM_VERSION=release-v1.2.3
 RUN wget -q "https://github.com/airockchip/rknn-llm/archive/refs/tags/${RKLLM_VERSION}.tar.gz" \
          -O /tmp/rknn-llm.tar.gz && \
     tar -xzf /tmp/rknn-llm.tar.gz -C /tmp && \
-    cp /tmp/rknn-llm-${RKLLM_VERSION}/rkllm-runtime/Linux/librkllm_api/aarch64/librknnrt.so /usr/lib/ && \
+    cp /tmp/rknn-llm-${RKLLM_VERSION}/examples/multimodal_model_demo/deploy/3rdparty/librknnrt/Linux/librknn_api/aarch64/librknnrt.so /usr/lib/ && \
     chmod 755 /usr/lib/librknnrt.so && \
     ldconfig && \
     rm -rf /tmp/rknn-llm.tar.gz /tmp/rknn-llm-${RKLLM_VERSION}
