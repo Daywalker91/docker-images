@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Symlink /dev/rknpu → /dev/dri/renderD129
+# Symlink /dev/rknpu -> /dev/dri/renderD129
 # Neuere Kernel exponieren die NPU über DRI statt /dev/rknpu
 # librknnrt.so sucht aber intern nach /dev/rknpu
 if [ ! -e /dev/rknpu ] && [ -e /dev/dri/renderD129 ]; then
@@ -11,6 +11,16 @@ elif [ -e /dev/rknpu ]; then
     echo "INFO: /dev/rknpu bereits vorhanden"
 else
     echo "WARN: Weder /dev/rknpu noch /dev/dri/renderD129 gefunden – NPU möglicherweise nicht verfügbar"
+fi
+
+# NPU Frequenz auf Maximum fixieren (notwendig für librknnrt.so Initialisierung)
+if [ -f /sys/class/devfreq/fdab0000.npu/governor ]; then
+    echo "INFO: Setze NPU Governor auf userspace und fixiere Frequenz auf 1GHz"
+    echo userspace > /sys/class/devfreq/fdab0000.npu/governor
+    echo 1000000000 > /sys/class/devfreq/fdab0000.npu/userspace/set_freq
+    echo "INFO: NPU Frequenz: $(cat /sys/class/devfreq/fdab0000.npu/cur_freq)"
+else
+    echo "WARN: NPU devfreq nicht gefunden – Frequenz nicht gesetzt"
 fi
 
 # NPU Umgebungsvariablen für rk-llama.cpp
