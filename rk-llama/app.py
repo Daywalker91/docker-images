@@ -83,7 +83,7 @@ def _start_server(model_path: str):
         "--host", "127.0.0.1",
         "--port", str(LLAMA_SERVER_PORT),
         "--parallel", "1",
-        "--no-mmap",           # Wichtig für NPU – kein Memory-Mapping
+       # "--no-mmap",           # Wichtig für NPU – kein Memory-Mapping
         "--no-warmup",         # Kein Warmup-Pass
         "--cache-type-k", "q8_0",
         "--cache-type-v", "q8_0",
