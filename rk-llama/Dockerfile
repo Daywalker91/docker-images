@@ -33,7 +33,7 @@ RUN wget -q "https://github.com/airockchip/rknn-toolkit2/raw/v2.3.0/rknpu2/runti
     chmod 755 /usr/lib/librknnrt.so && \
     ldconfig
 
-# Build rk-llama.cpp mit RKNPU2 Support und Clang-21
+# Build rk-llama.cpp mit RKNPU2 Support, Clang-21 und explizitem ARMv8.2-A Target
 RUN git clone --depth=1 -b rknpu2 https://github.com/invisiofficial/rk-llama.cpp.git /build/rk-llama.cpp
 
 WORKDIR /build/rk-llama.cpp
@@ -41,7 +41,9 @@ WORKDIR /build/rk-llama.cpp
 RUN cmake -S . -B build \
         -DLLAMA_RKNPU2=ON \
         -DCMAKE_C_COMPILER=clang-21 \
-        -DCMAKE_CXX_COMPILER=clang++-21 && \
+        -DCMAKE_CXX_COMPILER=clang++-21 \
+        -DCMAKE_C_FLAGS="-march=armv8.2-a" \
+        -DCMAKE_CXX_FLAGS="-march=armv8.2-a" && \
     cmake --build build -j "$(nproc)" && \
     cp build/bin/llama-server /usr/local/bin/ && \
     find build -name "*.so*" -exec cp {} /usr/lib/ \; && \
