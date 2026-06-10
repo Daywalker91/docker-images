@@ -34,7 +34,7 @@ _server_lock = threading.Lock()
 _server_ready = False
 
 
-def _wait_for_server(timeout=120):
+def _wait_for_server(timeout=300):
     """Wartet bis llama-server bereit ist."""
     global _server_ready
     url = f"http://localhost:{LLAMA_SERVER_PORT}/health"
