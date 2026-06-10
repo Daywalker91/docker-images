@@ -20,20 +20,15 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir flask requests huggingface_hub
 
-# Install Clang-21 (avoids PAC compilation, better ARM64 codegen for rknpu2)
+# Install Clang-21 (same as rkllama reference build)
 RUN wget https://apt.llvm.org/llvm.sh && \
     chmod +x llvm.sh && \
     ./llvm.sh 21 && \
     apt-get install -y clang-21 libomp-21-dev libomp5 && \
     rm llvm.sh
 
-# RKNN Runtime Library – aus rknn-toolkit2 v2.3.0 (passend zu NPU Driver v0.9.8)
-RUN wget -q "https://github.com/airockchip/rknn-toolkit2/raw/v2.3.0/rknpu2/runtime/Linux/librknn_api/aarch64/librknnrt.so" \
-         -O /usr/lib/librknnrt.so && \
-    chmod 755 /usr/lib/librknnrt.so && \
-    ldconfig
-
-# Build rk-llama.cpp mit RKNPU2 Support, Clang-21 und explizitem ARMv8.2-A Target
+# Build rk-llama.cpp mit RKNPU2 Support und Clang-21
+# No -march flags, no extra cmake options — exactly like NotPunchnox rkllama reference build
 RUN git clone --depth=1 -b rknpu2 https://github.com/invisiofficial/rk-llama.cpp.git /build/rk-llama.cpp
 
 WORKDIR /build/rk-llama.cpp
@@ -41,12 +36,16 @@ WORKDIR /build/rk-llama.cpp
 RUN cmake -S . -B build \
         -DLLAMA_RKNPU2=ON \
         -DCMAKE_C_COMPILER=clang-21 \
-        -DCMAKE_CXX_COMPILER=clang++-21 \
-        -DCMAKE_C_FLAGS="-march=armv8.2-a" \
-        -DCMAKE_CXX_FLAGS="-march=armv8.2-a" && \
+        -DCMAKE_CXX_COMPILER=clang++-21 && \
     cmake --build build -j "$(nproc)" && \
     cp build/bin/llama-server /usr/local/bin/ && \
     find build -name "*.so*" -exec cp {} /usr/lib/ \; && \
+    ldconfig
+
+# RKNN Runtime Library – aus rk-llama.cpp Repo (getestete Version v2.3.2)
+# Identisch mit rkllama Reference Build von NotPunchnox
+RUN cp /build/rk-llama.cpp/ggml/src/ggml-rknpu2/libs/librknnrt.so /usr/lib/ && \
+    chmod 755 /usr/lib/librknnrt.so && \
     ldconfig && \
     rm -rf /build/rk-llama.cpp
 
