@@ -44,6 +44,8 @@ RUN cmake -S . -B build \
         -DCMAKE_CXX_COMPILER=clang++-21 && \
     cmake --build build -j "$(nproc)" && \
     cp build/bin/llama-server /usr/local/bin/ && \
+    find build -name "*.so*" -exec cp {} /usr/lib/ \; && \
+    ldconfig && \
     rm -rf /build/rk-llama.cpp
 
 WORKDIR /app
