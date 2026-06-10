@@ -28,26 +28,12 @@ RUN wget https://apt.llvm.org/llvm.sh && \
     rm llvm.sh
 
 # RKNN Runtime Library – aus rknn-toolkit2 v2.3.0 (passend zu NPU Driver v0.9.8)
-RUN wget -q "https://github.com/airockchip/rknn-toolkit2/raw/v2.3.0/rknpu2/runtime/Linux/librknn_api/aarch64/librknnrt.so" -O /usr/lib/librknnrt.so && chmod 755 /usr/lib/librknnrt.so && ldconfig
+RUN wget -q "https://github.com/airockchip/rknn-toolkit2/raw/v2.3.0/rknpu2/runtime/Linux/librknn_api/aarch64/librknnrt.so" \
+         -O /usr/lib/librknnrt.so && \
+    chmod 755 /usr/lib/librknnrt.so && \
+    ldconfig
 
 # Build rk-llama.cpp mit RKNPU2 Support und Clang-21
-RUN git clone --depth=1 -b rknpu2 https://github.com/invisiofficial/rk-llama.cpp.git /build/rk-llama.cpp
-
-WORKDIR /build/rk-llama.cpp
-
-RUN cmake -S . -B build -DLLAMA_RKNPU2=ON -DCMAKE_C_COMPILER=clang-21 -DCMAKE_CXX_COMPILER=clang++-21 && cmake --build build -j "$(nproc)" && cp build/bin/llama-server /usr/local/bin/ && rm -rf /build/rk-llama.cpp
-
-WORKDIR /app
-
-COPY app.py .
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
-RUN mkdir -p /models
-
-EXPOSE 5002
-
-ENTRYPOINT ["/entrypoint.sh"]
 RUN git clone --depth=1 -b rknpu2 https://github.com/invisiofficial/rk-llama.cpp.git /build/rk-llama.cpp
 
 WORKDIR /build/rk-llama.cpp
@@ -71,43 +57,3 @@ RUN mkdir -p /models
 EXPOSE 5002
 
 ENTRYPOINT ["/entrypoint.sh"]
-    -DBUILD_SHARED_LIBS=OFF \
-    && cmake --build build --target llama-server -j$(nproc)
-
-# ── Runtime Stage ─────────────────────────────────────────────────────────────
-FROM python:slim
-
-LABEL org.opencontainers.image.source="https://github.com/Daywalker91/docker-images"
-LABEL org.opencontainers.image.description="rk-llama.cpp – llama.cpp mit RK3588 NPU Backend, OpenAI-kompatibler API"
-LABEL org.opencontainers.image.licenses="MIT"
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgomp1 \
-    libstdc++6 \
-    libgcc-s1 \
-    wget \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-# RKNN Runtime Library – aus rknn-toolkit2 v2.3.0 (passend zu NPU Driver v0.9.8)
-RUN wget -q "https://github.com/airockchip/rknn-toolkit2/raw/v2.3.0/rknpu2/runtime/Linux/librknn_api/aarch64/librknnrt.so" \
-         -O /usr/lib/librknnrt.so && \
-    chmod 755 /usr/lib/librknnrt.so && \
-    ldconfig
-
-# llama-server Binary aus Build-Stage
-COPY --from=builder /build/build/bin/llama-server /usr/local/bin/llama-server
-
-WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY app.py entrypoint.sh ./
-RUN chmod +x entrypoint.sh
-
-RUN mkdir -p /models
-
-EXPOSE 5002
-
-CMD ["/app/entrypoint.sh"]
