@@ -28,12 +28,26 @@ RUN wget https://apt.llvm.org/llvm.sh && \
     rm llvm.sh
 
 # RKNN Runtime Library – aus rknn-toolkit2 v2.3.0 (passend zu NPU Driver v0.9.8)
-RUN wget -q "https://github.com/airockchip/rknn-toolkit2/raw/v2.3.0/rknpu2/runtime/Linux/librknn_api/aarch64/librknnrt.so" \
-         -O /usr/lib/librknnrt.so && \
-    chmod 755 /usr/lib/librknnrt.so && \
-    ldconfig
+RUN wget -q "https://github.com/airockchip/rknn-toolkit2/raw/v2.3.0/rknpu2/runtime/Linux/librknn_api/aarch64/librknnrt.so" -O /usr/lib/librknnrt.so && chmod 755 /usr/lib/librknnrt.so && ldconfig
 
 # Build rk-llama.cpp mit RKNPU2 Support und Clang-21
+RUN git clone --depth=1 -b rknpu2 https://github.com/invisiofficial/rk-llama.cpp.git /build/rk-llama.cpp
+
+WORKDIR /build/rk-llama.cpp
+
+RUN cmake -S . -B build -DLLAMA_RKNPU2=ON -DCMAKE_C_COMPILER=clang-21 -DCMAKE_CXX_COMPILER=clang++-21 && cmake --build build -j "$(nproc)" && cp build/bin/llama-server /usr/local/bin/ && rm -rf /build/rk-llama.cpp
+
+WORKDIR /app
+
+COPY app.py .
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+RUN mkdir -p /models
+
+EXPOSE 5002
+
+ENTRYPOINT ["/entrypoint.sh"]
 RUN git clone --depth=1 -b rknpu2 https://github.com/invisiofficial/rk-llama.cpp.git /build/rk-llama.cpp
 
 WORKDIR /build/rk-llama.cpp
