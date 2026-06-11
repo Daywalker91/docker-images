@@ -35,6 +35,7 @@ WORKDIR /build/rk-llama.cpp
 
 RUN cmake -S . -B build \
         -DLLAMA_RKNPU2=ON \
+        -DGGML_NATIVE=OFF \
         -DCMAKE_C_COMPILER=clang-21 \
         -DCMAKE_CXX_COMPILER=clang++-21 && \
     cmake --build build -j "$(nproc)" && \
