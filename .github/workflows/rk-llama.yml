@@ -39,41 +39,31 @@ jobs:
           fi
 
   build:
-    name: Build & Push (arm64 only)
-    runs-on: ubuntu-latest
+    name: Build & Push (nativ ARM64 auf RK3588)
+    runs-on: [self-hosted, linux, arm64, rk3588]
     needs: check
     if: needs.check.outputs.should_build == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: QEMU einrichten (für arm64-Build)
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      - name: Docker Buildx einrichten
-        uses: docker/setup-buildx-action@v3
-
       - name: Login bei ghcr.io
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+            echo "${{ secrets.GH_PAT }}" | \
+            nerdctl --address /run/k3s/containerd/containerd.sock \
+              login ghcr.io -u Daywalker91 --password-stdin
 
-      - name: Build & Push (arm64 only)
-        uses: docker/build-push-action@v6
-        with:
-          context: ./rk-llama
-          file: ./rk-llama/Dockerfile
-          platforms: linux/arm64
-          push: true
-          tags: |
-            ghcr.io/daywalker91/rk-llama:latest
-            ghcr.io/daywalker91/rk-llama:${{ needs.check.outputs.latest_commit }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Build & Push (nativ arm64)
+        run: |
+            nerdctl --address /run/k3s/containerd/containerd.sock \
+              build \
+              -t ghcr.io/daywalker91/rk-llama:latest \
+              -t ghcr.io/daywalker91/rk-llama:${{ needs.check.outputs.latest_commit }} \
+              ./rk-llama
+            nerdctl --address /run/k3s/containerd/containerd.sock \
+              push ghcr.io/daywalker91/rk-llama:latest
+            nerdctl --address /run/k3s/containerd/containerd.sock \
+              push ghcr.io/daywalker91/rk-llama:${{ needs.check.outputs.latest_commit }}
 
       - name: GitHub Variablen aktualisieren
         if: needs.check.outputs.should_build == 'true'
