@@ -34,13 +34,13 @@ RUN git clone --depth=1 -b rknpu2 https://github.com/invisiofficial/rk-llama.cpp
 WORKDIR /build/rk-llama.cpp
 
 # librknnrt.so aus Repo sichern, dann bauen, dann zurückschieben
-RUN mv /build/rk-llama.cpp/ggml/src/ggml-rknpu2/libs/librknnrt.so /tmp/librknnrt.so && \
-    cmake -S . -B build \
+RUN cmake -S . -B build \
         -DLLAMA_RKNPU2=ON \
         -DCMAKE_C_COMPILER=clang-21 \
         -DCMAKE_CXX_COMPILER=clang++-21 && \
     cmake --build build -j "$(nproc)" && \
     cp build/bin/llama-server /usr/local/bin/ && \
+    cp ggml/src/ggml-rknpu2/libs/librknnrt.so /tmp/librknnrt.so && \
     find build -name "*.so*" -exec cp {} /usr/lib/ \; && \
     ldconfig && \
     rm -rf /build/rk-llama.cpp && \
