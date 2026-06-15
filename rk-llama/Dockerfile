@@ -33,6 +33,7 @@ RUN git clone --depth=1 -b rknpu2 https://github.com/invisiofficial/rk-llama.cpp
 
 WORKDIR /build/rk-llama.cpp
 
+# librknnrt.so wird hardcoded vom Build-Pfad gesucht - Symlink erstellen
 RUN cmake -S . -B build \
         -DLLAMA_RKNPU2=ON \
         -DCMAKE_C_COMPILER=clang-21 \
@@ -40,11 +41,9 @@ RUN cmake -S . -B build \
     cmake --build build -j "$(nproc)" && \
     cp build/bin/llama-server /usr/local/bin/ && \
     find build -name "*.so*" -exec cp {} /usr/lib/ \; && \
-    # librknnrt.so wird hardcoded vom Build-Pfad gesucht - Symlink erstellen
     mkdir -p /build/rk-llama.cpp/ggml/src/ggml-rknpu2/libs && \
     ln -s /usr/lib/librknnrt.so /build/rk-llama.cpp/ggml/src/ggml-rknpu2/libs/librknnrt.so && \
     ldconfig
-    # KEIN rm -rf /build/rk-llama.cpp mehr!
 
 WORKDIR /app
 
