@@ -35,20 +35,16 @@ WORKDIR /build/rk-llama.cpp
 
 RUN cmake -S . -B build \
         -DLLAMA_RKNPU2=ON \
-        -DGGML_NATIVE=OFF \
         -DCMAKE_C_COMPILER=clang-21 \
         -DCMAKE_CXX_COMPILER=clang++-21 && \
     cmake --build build -j "$(nproc)" && \
     cp build/bin/llama-server /usr/local/bin/ && \
     find build -name "*.so*" -exec cp {} /usr/lib/ \; && \
+    # librknnrt.so wird hardcoded vom Build-Pfad gesucht - Symlink erstellen
+    mkdir -p /build/rk-llama.cpp/ggml/src/ggml-rknpu2/libs && \
+    ln -s /usr/lib/librknnrt.so /build/rk-llama.cpp/ggml/src/ggml-rknpu2/libs/librknnrt.so && \
     ldconfig
-
-# RKNN Runtime Library – aus rk-llama.cpp Repo (getestete Version v2.3.2)
-# Identisch mit rkllama Reference Build von NotPunchnox
-RUN cp /build/rk-llama.cpp/ggml/src/ggml-rknpu2/libs/librknnrt.so /usr/lib/ && \
-    chmod 755 /usr/lib/librknnrt.so && \
-    ldconfig && \
-    rm -rf /build/rk-llama.cpp
+    # KEIN rm -rf /build/rk-llama.cpp mehr!
 
 WORKDIR /app
 
