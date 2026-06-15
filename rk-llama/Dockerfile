@@ -40,9 +40,7 @@ RUN cmake -S . -B build \
         -DCMAKE_CXX_COMPILER=clang++-21 && \
     cmake --build build -j "$(nproc)" && \
     cp build/bin/llama-server /usr/local/bin/ && \
-    find build -name "*.so*" -exec cp {} /usr/lib/ \; && \
-    mkdir -p /build/rk-llama.cpp/ggml/src/ggml-rknpu2/libs && \
-    ln -s /usr/lib/librknnrt.so /build/rk-llama.cpp/ggml/src/ggml-rknpu2/libs/librknnrt.so && \
+    find build/bin build/lib -name "*.so*" -exec cp {} /usr/lib/ \; && \
     ldconfig
 
 WORKDIR /app
