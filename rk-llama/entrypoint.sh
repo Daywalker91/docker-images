@@ -1,19 +1,20 @@
 #!/bin/bash
 set -e
 
-# Symlink /dev/rknpu -> /dev/dri/renderD129
-# Neuere Kernel exponieren die NPU über DRI statt /dev/rknpu
-# librknnrt.so sucht aber intern nach /dev/rknpu
-if [ ! -e /dev/rknpu ] && [ -e /dev/dri/renderD129 ]; then
-    echo "INFO: Erstelle Symlink /dev/rknpu -> /dev/dri/renderD129"
-    ln -s /dev/dri/renderD129 /dev/rknpu
-elif [ -e /dev/rknpu ]; then
-    echo "INFO: /dev/rknpu bereits vorhanden"
+# Kein Symlink /dev/rknpu mehr!
+# librknnrt.so erkennt DRM-basierte NPU automatisch über /dev/dri/card* und /dev/dri/renderD*
+# Ein Symlink /dev/rknpu -> /dev/dri/renderD129 zwingt die Library in den legacy ioctl Pfad
+# und verursacht ENOTTY. Ohne Symlink nutzt sie DRM ioctls (magic 0x64).
+
+# NPU DRI Device prüfen
+if ls /dev/dri/ > /dev/null 2>&1; then
+    echo "INFO: DRI Devices vorhanden:"
+    ls -la /dev/dri/
 else
-    echo "WARN: Weder /dev/rknpu noch /dev/dri/renderD129 gefunden – NPU möglicherweise nicht verfügbar"
+    echo "WARN: Keine DRI Devices gefunden – NPU möglicherweise nicht verfügbar"
 fi
 
-# NPU Frequenz auf Maximum fixieren (notwendig für librknnrt.so Initialisierung)
+# NPU Frequenz auf Maximum fixieren
 if [ -f /sys/class/devfreq/fdab0000.npu/governor ]; then
     echo "INFO: Setze NPU Governor auf userspace und fixiere Frequenz auf 1GHz"
     echo userspace > /sys/class/devfreq/fdab0000.npu/governor
