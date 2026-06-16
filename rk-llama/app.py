@@ -196,7 +196,7 @@ def chat_completions():
             f"http://localhost:{LLAMA_SERVER_PORT}/v1/chat/completions",
             json=data,
             stream=stream,
-            timeout=300,
+            timeout=None,
         )
 
         if stream:
@@ -232,7 +232,7 @@ def completions():
         resp = requests.post(
             f"http://localhost:{LLAMA_SERVER_PORT}/v1/completions",
             json=data,
-            timeout=300,
+            timeout=None,
         )
         return jsonify(resp.json()), resp.status_code
     except Exception as e:
