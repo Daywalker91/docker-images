@@ -7,6 +7,11 @@ on:
   schedule:
     - cron: '0 4 * * 1'   # wöchentlich montags 04:00 UTC
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'rknn-llm Version zum Testen (z.B. v1.2.1). Leer lassen für automatische neueste Version.'
+        required: false
+        type: string
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -19,7 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       needs_build: ${{ steps.compare.outputs.needs_build }}
-      current_version: ${{ steps.version.outputs.version }}
+      current_version: ${{ steps.final.outputs.version }}
+      is_manual_test: ${{ steps.final.outputs.is_manual_test }}
 
     steps:
       - name: Neueste rknn-llm Version holen (GitHub API)
@@ -32,6 +38,21 @@ jobs:
 
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Aktuelle rknn-llm Version: $VERSION"
+
+      - name: Manuellen Versions-Override anwenden (falls gesetzt)
+        id: final
+        run: |
+          MANUAL_VERSION="${{ inputs.version }}"
+          AUTO_VERSION="${{ steps.version.outputs.version }}"
+
+          if [ -n "$MANUAL_VERSION" ]; then
+            echo "→ Manueller Test mit Version: $MANUAL_VERSION (wird NICHT als RKLLM_VERSION gespeichert)"
+            echo "version=$MANUAL_VERSION" >> $GITHUB_OUTPUT
+            echo "is_manual_test=true" >> $GITHUB_OUTPUT
+          else
+            echo "version=$AUTO_VERSION" >> $GITHUB_OUTPUT
+            echo "is_manual_test=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Vergleich mit gespeicherter Version
         id: compare
@@ -74,18 +95,35 @@ jobs:
 
       - name: Build & Push (nativ arm64)
         run: |
+          VERSION="${{ needs.check.outputs.current_version }}"
+          IS_MANUAL="${{ needs.check.outputs.is_manual_test }}"
+
+          TAGS="-t ghcr.io/daywalker91/rkllm:${{ github.sha }}"
+          if [ "$IS_MANUAL" = "true" ]; then
+            # Manueller Versionstest: eigenes Tag, "latest" bleibt unberührt
+            TAGS="$TAGS -t ghcr.io/daywalker91/rkllm:test-${VERSION}"
+          else
+            TAGS="$TAGS -t ghcr.io/daywalker91/rkllm:latest"
+          fi
+
           nerdctl --address /run/k3s/containerd/containerd.sock \
             build \
-            --build-arg RKLLM_VERSION=${{ needs.check.outputs.current_version }} \
-            -t ghcr.io/daywalker91/rkllm:latest \
-            -t ghcr.io/daywalker91/rkllm:${{ github.sha }} \
+            --build-arg RKLLM_VERSION=${VERSION} \
+            $TAGS \
             ./rkllm
-          nerdctl --address /run/k3s/containerd/containerd.sock \
-            push ghcr.io/daywalker91/rkllm:latest
+
+          if [ "$IS_MANUAL" = "true" ]; then
+            nerdctl --address /run/k3s/containerd/containerd.sock \
+              push ghcr.io/daywalker91/rkllm:test-${VERSION}
+          else
+            nerdctl --address /run/k3s/containerd/containerd.sock \
+              push ghcr.io/daywalker91/rkllm:latest
+          fi
           nerdctl --address /run/k3s/containerd/containerd.sock \
             push ghcr.io/daywalker91/rkllm:${{ github.sha }}
 
       - name: Version in GitHub Variable speichern
+        if: needs.check.outputs.is_manual_test != 'true'
         run: |
           VERSION="${{ needs.check.outputs.current_version }}"
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
