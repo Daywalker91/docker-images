@@ -1,11 +1,18 @@
 """
 ctypes-Wrapper für die rkllm C-Library (librkllmrt.so).
-Basiert auf dem rkllm.h Header von airockchip/rknn-llm v1.2.1.
+Struct-Layout basiert auf dem aktuellen rkllm.h Header von airockchip/rknn-llm (main, Stand 2026).
+Quelle: https://github.com/airockchip/rknn-llm/blob/main/rkllm-runtime/Linux/librkllm_api/include/rkllm.h
+
+Wichtig: Die Structs MÜSSEN exakt mit dem C-Header übereinstimmen (Feldreihenfolge + Typen).
+Ein falsches Layout führt nicht zu einem Fehler, sondern zu stillschweigend falschen Werten
+(z.B. landet temperature im falschen Feld) oder Memory Corruption.
 """
 import ctypes
-import threading
 import logging
 import os
+import queue
+import threading
+import time
 
 log = logging.getLogger(__name__)
 
@@ -13,34 +20,98 @@ log = logging.getLogger(__name__)
 _lib = ctypes.CDLL(os.environ.get("RKLLM_LIB", "librkllmrt.so"))
 
 
-# ── Enums ──────────────────────────────────────────────────────────────────────
-LLM_RUN_NORMAL  = 0
-LLM_RUN_WAITING = 1
-LLM_RUN_FINISH  = 2
-LLM_RUN_ERROR   = 3
+# ── Enums (LLMCallState) ──────────────────────────────────────────────────────
+RKLLM_RUN_NORMAL  = 0
+RKLLM_RUN_WAITING = 1
+RKLLM_RUN_FINISH  = 2
+RKLLM_RUN_ERROR   = 3
 
-RKLLM_RUN_NORMAL = 0
-RKLLM_INPUT_PROMPT = 0
+# ── Enums (RKLLMInputType) ────────────────────────────────────────────────────
+RKLLM_INPUT_PROMPT     = 0
+RKLLM_INPUT_TOKEN      = 1
+RKLLM_INPUT_EMBED      = 2
+RKLLM_INPUT_MULTIMODAL = 3
+
+# ── Enums (RKLLMInferMode) ────────────────────────────────────────────────────
+RKLLM_INFER_GENERATE              = 0
+RKLLM_INFER_GET_LAST_HIDDEN_LAYER = 1
+RKLLM_INFER_GET_LOGITS            = 2
+
+# ── CPU Bitmasks (für enabled_cpus_mask) ──────────────────────────────────────
+CPU0 = 1 << 0
+CPU1 = 1 << 1
+CPU2 = 1 << 2
+CPU3 = 1 << 3
+CPU4 = 1 << 4
+CPU5 = 1 << 5
+CPU6 = 1 << 6
+CPU7 = 1 << 7
+CPU_ALL = 0xFF
+
+# RK3588: Cortex-A76 (schnell) = CPU4-7, Cortex-A55 (langsam) = CPU0-3.
+# Auf vielen Boards sind aber die Indizes vertauscht (A55 zuerst) – per ENV testbar.
+CPU_BIG_CORES_RK3588 = CPU4 | CPU5 | CPU6 | CPU7
 
 
 # ── Structs ────────────────────────────────────────────────────────────────────
 class RKLLMExtendParam(ctypes.Structure):
+    """
+    typedef struct {
+        int32_t base_domain_id;
+        int8_t  embed_flash;
+        int8_t  enabled_cpus_num;
+        uint32_t enabled_cpus_mask;
+        uint8_t n_batch;
+        int8_t  use_cross_attn;
+        uint8_t reserved[104];
+    } RKLLMExtendParam;
+    """
     _fields_ = [
-        ("base_domain_id", ctypes.c_int32),
-        ("reserved",       ctypes.c_uint8 * 112),
+        ("base_domain_id",    ctypes.c_int32),
+        ("embed_flash",       ctypes.c_int8),
+        ("enabled_cpus_num",  ctypes.c_int8),
+        ("enabled_cpus_mask", ctypes.c_uint32),
+        ("n_batch",           ctypes.c_uint8),
+        ("use_cross_attn",    ctypes.c_int8),
+        ("reserved",          ctypes.c_uint8 * 104),
     ]
 
 
 class RKLLMParam(ctypes.Structure):
+    """
+    typedef struct {
+        const char* model_path;
+        int32_t max_context_len;
+        int32_t max_new_tokens;
+        int32_t top_k;
+        int32_t n_keep;
+        float   top_p;
+        float   temperature;
+        float   repeat_penalty;
+        float   frequency_penalty;
+        float   presence_penalty;
+        int32_t mirostat;
+        float   mirostat_tau;
+        float   mirostat_eta;
+        bool    skip_special_token;
+        bool    is_async;
+        const char* img_start;
+        const char* img_end;
+        const char* img_content;
+        RKLLMExtendParam extend_param;
+    } RKLLMParam;
+    """
     _fields_ = [
         ("model_path",         ctypes.c_char_p),
         ("max_context_len",    ctypes.c_int32),
         ("max_new_tokens",     ctypes.c_int32),
         ("top_k",              ctypes.c_int32),
+        ("n_keep",             ctypes.c_int32),
         ("top_p",              ctypes.c_float),
         ("temperature",        ctypes.c_float),
         ("repeat_penalty",     ctypes.c_float),
         ("frequency_penalty",  ctypes.c_float),
+        ("presence_penalty",   ctypes.c_float),
         ("mirostat",           ctypes.c_int32),
         ("mirostat_tau",       ctypes.c_float),
         ("mirostat_eta",       ctypes.c_float),
@@ -53,36 +124,145 @@ class RKLLMParam(ctypes.Structure):
     ]
 
 
-class RKLLMResult(ctypes.Structure):
+class RKLLMLoraAdapter(ctypes.Structure):
     _fields_ = [
-        ("text",     ctypes.c_char_p),
-        ("token_id", ctypes.c_int32),
+        ("lora_adapter_path", ctypes.c_char_p),
+        ("lora_adapter_name", ctypes.c_char_p),
+        ("scale",             ctypes.c_float),
     ]
 
 
-class _InputUnion(ctypes.Union):
+class RKLLMEmbedInput(ctypes.Structure):
     _fields_ = [
-        ("prompt_input", ctypes.c_char_p),
-        ("_pad",         ctypes.c_uint8 * 64),
+        ("embed",    ctypes.POINTER(ctypes.c_float)),
+        ("n_tokens", ctypes.c_size_t),
+    ]
+
+
+class RKLLMTokenInput(ctypes.Structure):
+    _fields_ = [
+        ("input_ids", ctypes.POINTER(ctypes.c_int32)),
+        ("n_tokens",  ctypes.c_size_t),
+    ]
+
+
+class RKLLMMultiModalInput(ctypes.Structure):
+    _fields_ = [
+        ("prompt",         ctypes.c_char_p),
+        ("image_embed",    ctypes.POINTER(ctypes.c_float)),
+        ("n_image_tokens", ctypes.c_size_t),
+        ("n_image",        ctypes.c_size_t),
+        ("image_width",    ctypes.c_size_t),
+        ("image_height",   ctypes.c_size_t),
+    ]
+
+
+class _RKLLMInputUnion(ctypes.Union):
+    _fields_ = [
+        ("prompt_input",    ctypes.c_char_p),
+        ("embed_input",     RKLLMEmbedInput),
+        ("token_input",     RKLLMTokenInput),
+        ("multimodal_input", RKLLMMultiModalInput),
     ]
 
 
 class RKLLMInput(ctypes.Structure):
+    """
+    typedef struct {
+        const char* role;
+        bool enable_thinking;
+        RKLLMInputType input_type;
+        union { ... };
+    } RKLLMInput;
+    """
+    _anonymous_ = ("u",)
     _fields_ = [
-        ("input_type", ctypes.c_int),
-        ("_data",      _InputUnion),
+        ("role",            ctypes.c_char_p),
+        ("enable_thinking",  ctypes.c_bool),
+        ("input_type",      ctypes.c_int),
+        ("u",               _RKLLMInputUnion),
+    ]
+
+
+class RKLLMLoraParam(ctypes.Structure):
+    _fields_ = [
+        ("lora_adapter_name", ctypes.c_char_p),
+    ]
+
+
+class RKLLMPromptCacheParam(ctypes.Structure):
+    _fields_ = [
+        ("save_prompt_cache",  ctypes.c_int),
+        ("prompt_cache_path",  ctypes.c_char_p),
     ]
 
 
 class RKLLMInferParam(ctypes.Structure):
+    """
+    typedef struct {
+        RKLLMInferMode mode;
+        RKLLMLoraParam* lora_params;
+        RKLLMPromptCacheParam* prompt_cache_params;
+        int keep_history;
+    } RKLLMInferParam;
+    """
     _fields_ = [
-        ("mode", ctypes.c_int),
+        ("mode",                ctypes.c_int),
+        ("lora_params",         ctypes.POINTER(RKLLMLoraParam)),
+        ("prompt_cache_params", ctypes.POINTER(RKLLMPromptCacheParam)),
+        ("keep_history",        ctypes.c_int),
+    ]
+
+
+class RKLLMResultLastHiddenLayer(ctypes.Structure):
+    _fields_ = [
+        ("hidden_states", ctypes.POINTER(ctypes.c_float)),
+        ("embd_size",     ctypes.c_int),
+        ("num_tokens",    ctypes.c_int),
+    ]
+
+
+class RKLLMResultLogits(ctypes.Structure):
+    _fields_ = [
+        ("logits",     ctypes.POINTER(ctypes.c_float)),
+        ("vocab_size", ctypes.c_int),
+        ("num_tokens", ctypes.c_int),
+    ]
+
+
+class RKLLMPerfStat(ctypes.Structure):
+    """Performance-Statistik – wird pro Result-Callback mitgeliefert (state == FINISH)."""
+    _fields_ = [
+        ("prefill_time_ms",  ctypes.c_float),
+        ("prefill_tokens",   ctypes.c_int),
+        ("generate_time_ms", ctypes.c_float),
+        ("generate_tokens",  ctypes.c_int),
+        ("memory_usage_mb",  ctypes.c_float),
+    ]
+
+
+class RKLLMResult(ctypes.Structure):
+    """
+    typedef struct {
+        const char* text;
+        int32_t token_id;
+        RKLLMResultLastHiddenLayer last_hidden_layer;
+        RKLLMResultLogits logits;
+        RKLLMPerfStat perf;
+    } RKLLMResult;
+    """
+    _fields_ = [
+        ("text",              ctypes.c_char_p),
+        ("token_id",          ctypes.c_int32),
+        ("last_hidden_layer", RKLLMResultLastHiddenLayer),
+        ("logits",            RKLLMResultLogits),
+        ("perf",               RKLLMPerfStat),
     ]
 
 
 # ── Callback-Typ ───────────────────────────────────────────────────────────────
 LLMResultCallback = ctypes.CFUNCTYPE(
-    None,
+    ctypes.c_int,                       # Rückgabewert: 0 = weiter, 1 = pausieren
     ctypes.POINTER(RKLLMResult),
     ctypes.c_void_p,
     ctypes.c_int,
@@ -107,72 +287,150 @@ _lib.rkllm_run.argtypes = [
     ctypes.c_void_p,
 ]
 
+_lib.rkllm_run_async.restype  = ctypes.c_int
+_lib.rkllm_run_async.argtypes = [
+    ctypes.c_void_p,
+    ctypes.POINTER(RKLLMInput),
+    ctypes.POINTER(RKLLMInferParam),
+    ctypes.c_void_p,
+]
+
 _lib.rkllm_destroy.restype  = ctypes.c_int
 _lib.rkllm_destroy.argtypes = [ctypes.c_void_p]
 
 _lib.rkllm_abort.restype  = ctypes.c_int
 _lib.rkllm_abort.argtypes = [ctypes.c_void_p]
 
+_lib.rkllm_is_running.restype  = ctypes.c_int
+_lib.rkllm_is_running.argtypes = [ctypes.c_void_p]
 
-# ── RKLLMModel Klasse ──────────────────────────────────────────────────────────
+_lib.rkllm_set_chat_template.restype  = ctypes.c_int
+_lib.rkllm_set_chat_template.argtypes = [
+    ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p,
+]
+
+
+# ── Sentinel für Queue-Ende ───────────────────────────────────────────────────
+_STREAM_DONE = object()
+_STREAM_ERROR = object()
+
+
 class RKLLMModel:
-    """Thread-sicherer Wrapper um die rkllm C-Library."""
+    """
+    Thread-sicherer Wrapper um die rkllm C-Library mit Token-Streaming.
+
+    Die NPU kann nur eine Inferenz gleichzeitig ausführen – paralleles Aufrufen
+    von generate_stream() aus mehreren Threads wird über self._lock serialisiert.
+    """
 
     def __init__(self, model_path: str, max_context_len: int = 4096,
-                 max_new_tokens: int = 2048, temperature: float = 0.7):
+                 max_new_tokens: int = 2048, temperature: float = 0.7,
+                 top_k: int = 1, top_p: float = 0.9,
+                 enabled_cpus_mask: int | None = None,
+                 enabled_cpus_num: int | None = None,
+                 system_prompt: str | None = None):
         self._handle = ctypes.c_void_p()
-        self._lock   = threading.Lock()
+        self._lock = threading.Lock()
 
-        # Inferenz-State (pro Aufruf)
-        self._output_tokens: list[str] = []
-        self._done = threading.Event()
-        self._error = False
+        # Pro-Aufruf State – wird in generate_stream() neu belegt
+        self._queue: "queue.Queue" = queue.Queue()
+        self._last_perf: dict = {}
 
-        # Callback als Attribut halten damit GC ihn nicht löscht
-        self._callback = LLMResultCallback(self._on_token)
+        # Callback als Attribut halten, sonst sammelt der GC ihn ein
+        # während die C-Lib noch Zeiger darauf hält -> Segfault.
+        self._callback = LLMResultCallback(self._on_result)
 
-        # Parameter aufbauen
         param = _lib.rkllm_createDefaultParam()
-        param.model_path      = model_path.encode()
-        param.max_context_len = max_context_len
-        param.max_new_tokens  = max_new_tokens
-        param.temperature     = temperature
-        param.top_k           = 1
-        param.top_p           = 0.9
+        param.model_path         = model_path.encode("utf-8")
+        param.max_context_len    = max_context_len
+        param.max_new_tokens     = max_new_tokens
+        param.temperature        = temperature
+        param.top_k              = top_k
+        param.top_p              = top_p
         param.skip_special_token = True
-        param.is_async        = False
+        param.is_async            = False
+
+        if enabled_cpus_mask is not None:
+            param.extend_param.enabled_cpus_mask = enabled_cpus_mask
+        if enabled_cpus_num is not None:
+            param.extend_param.enabled_cpus_num = enabled_cpus_num
 
         ret = _lib.rkllm_init(ctypes.byref(self._handle), ctypes.byref(param), self._callback)
         if ret != 0:
-            raise RuntimeError(f"rkllm_init fehlgeschlagen: {ret}")
-        log.info("rkllm Modell geladen: %s", model_path)
+            raise RuntimeError(f"rkllm_init fehlgeschlagen (Code {ret}) für Modell: {model_path}")
+        log.info(
+            "rkllm Modell geladen: %s (ctx=%d, max_new_tokens=%d, cpus_mask=%s, cpus_num=%s)",
+            model_path, max_context_len, max_new_tokens,
+            hex(enabled_cpus_mask) if enabled_cpus_mask is not None else "default",
+            enabled_cpus_num if enabled_cpus_num is not None else "default",
+        )
 
-    def _on_token(self, result_ptr, userdata, state):
-        """Wird von der C-Library pro Token aufgerufen."""
-        if state == LLM_RUN_ERROR:
-            self._error = True
-            self._done.set()
-            return
-        if result_ptr and result_ptr.contents.text:
-            token = result_ptr.contents.text.decode("utf-8", errors="replace")
-            self._output_tokens.append(token)
-        if state == LLM_RUN_FINISH:
-            self._done.set()
+        if system_prompt:
+            self.set_chat_template(system_prompt)
 
-    def generate(self, prompt: str) -> str:
-        """Blockierende Inferenz – gibt den vollständigen Text zurück."""
+    def set_chat_template(self, system_prompt: str, prefix: str = "", postfix: str = ""):
+        ret = _lib.rkllm_set_chat_template(
+            self._handle,
+            system_prompt.encode("utf-8"),
+            prefix.encode("utf-8"),
+            postfix.encode("utf-8"),
+        )
+        if ret != 0:
+            log.warning("rkllm_set_chat_template fehlgeschlagen (Code %d)", ret)
+
+    # ── Callback aus der C-Lib (läuft im Inferenz-Thread der Library!) ────────
+    def _on_result(self, result_ptr, userdata, state) -> int:
+        try:
+            if state == RKLLM_RUN_ERROR:
+                self._queue.put(_STREAM_ERROR)
+                return 0
+
+            if result_ptr:
+                res = result_ptr.contents
+                if res.text:
+                    token = res.text.decode("utf-8", errors="replace")
+                    self._queue.put(token)
+
+                if state == RKLLM_RUN_FINISH:
+                    perf = res.perf
+                    self._last_perf = {
+                        "prefill_time_ms":  perf.prefill_time_ms,
+                        "prefill_tokens":   perf.prefill_tokens,
+                        "generate_time_ms": perf.generate_time_ms,
+                        "generate_tokens":  perf.generate_tokens,
+                        "memory_usage_mb":  perf.memory_usage_mb,
+                    }
+                    self._queue.put(_STREAM_DONE)
+            return 0
+        except Exception:
+            log.exception("Fehler im rkllm result callback")
+            self._queue.put(_STREAM_ERROR)
+            return 0
+
+    def generate_stream(self, prompt: str, role: str = "user"):
+        """
+        Generator – yieldet Text-Chunks sobald sie von der NPU kommen.
+        Am Ende steht self.last_perf mit den Performance-Stats des letzten Laufs zur Verfügung.
+        """
         with self._lock:
-            self._output_tokens = []
-            self._done.clear()
-            self._error = False
+            # Queue für diesen Aufruf leeren (Sicherheitsnetz falls noch alte Reste drin sind)
+            while not self._queue.empty():
+                self._queue.get_nowait()
+            self._last_perf = {}
 
-            rkllm_input              = RKLLMInput()
-            rkllm_input.input_type   = RKLLM_INPUT_PROMPT
-            rkllm_input._data.prompt_input = prompt.encode()
+            rkllm_input = RKLLMInput()
+            rkllm_input.role = role.encode("utf-8")
+            rkllm_input.enable_thinking = False
+            rkllm_input.input_type = RKLLM_INPUT_PROMPT
+            rkllm_input.prompt_input = prompt.encode("utf-8")
 
             infer_param = RKLLMInferParam()
-            infer_param.mode = RKLLM_RUN_NORMAL
+            infer_param.mode = RKLLM_INFER_GENERATE
+            infer_param.lora_params = None
+            infer_param.prompt_cache_params = None
+            infer_param.keep_history = 0
 
+            t_start = time.monotonic()
             ret = _lib.rkllm_run(
                 self._handle,
                 ctypes.byref(rkllm_input),
@@ -180,14 +438,39 @@ class RKLLMModel:
                 None,
             )
             if ret != 0:
-                raise RuntimeError(f"rkllm_run fehlgeschlagen: {ret}")
+                raise RuntimeError(f"rkllm_run fehlgeschlagen (Code {ret})")
 
-            self._done.wait(timeout=120)
+            while True:
+                item = self._queue.get()
+                if item is _STREAM_DONE:
+                    perf = self._last_perf
+                    wall_s = time.monotonic() - t_start
+                    log.info(
+                        "rkllm fertig: prefill=%.0fms/%dtok generate=%.0fms/%dtok "
+                        "(%.2f tok/s) wall=%.1fs mem=%.0fMiB",
+                        perf.get("prefill_time_ms", 0), perf.get("prefill_tokens", 0),
+                        perf.get("generate_time_ms", 0), perf.get("generate_tokens", 0),
+                        (perf.get("generate_tokens", 0) / (perf.get("generate_time_ms", 1) / 1000))
+                            if perf.get("generate_time_ms") else 0.0,
+                        wall_s,
+                        perf.get("memory_usage_mb", 0),
+                    )
+                    return
+                if item is _STREAM_ERROR:
+                    raise RuntimeError("rkllm Inferenz-Fehler (Callback meldete RKLLM_RUN_ERROR)")
+                yield item
 
-            if self._error:
-                raise RuntimeError("rkllm Inferenz-Fehler")
+    def generate(self, prompt: str, role: str = "user") -> str:
+        """Blockierende Inferenz – sammelt den Stream und gibt den vollständigen Text zurück."""
+        return "".join(self.generate_stream(prompt, role=role))
 
-            return "".join(self._output_tokens)
+    @property
+    def last_perf(self) -> dict:
+        return dict(self._last_perf)
+
+    def abort(self):
+        if self._handle:
+            _lib.rkllm_abort(self._handle)
 
     def destroy(self):
         if self._handle:
