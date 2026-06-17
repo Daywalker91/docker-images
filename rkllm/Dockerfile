@@ -2,7 +2,7 @@
 FROM python:slim
 
 LABEL org.opencontainers.image.source="https://github.com/Daywalker91/docker-images"
-LABEL org.opencontainers.image.description="RKLLM container – LLM Inferenz auf RK3588 NPU"
+LABEL org.opencontainers.image.description="RKLLM container – LLM Inferenz auf RK3588 NPU (echte RKLLM-Runtime, kein GGUF)"
 LABEL org.opencontainers.image.licenses="MIT"
 
 # System-Dependencies
@@ -19,12 +19,10 @@ RUN VERSION_CLEAN=$(echo ${RKLLM_VERSION} | sed 's/^v//') && \
     wget -q "https://github.com/airockchip/rknn-llm/archive/refs/tags/${RKLLM_VERSION}.tar.gz" \
          -O /tmp/rknn-llm.tar.gz && \
     tar -xzf /tmp/rknn-llm.tar.gz -C /tmp && \
-    # aarch64 Library in Systempfad kopieren
     cp /tmp/rknn-llm-${VERSION_CLEAN}/rkllm-runtime/Linux/librkllm_api/aarch64/librkllmrt.so /usr/lib/ && \
     rm -rf /tmp/rknn-llm* /tmp/rknn-llm.tar.gz
 
-# RKNN Runtime Library – öffnet den NPU via /dev/dri/renderD129
-# Wird von librkllmrt.so intern benötigt
+# RKNN Runtime Library – wird von librkllmrt.so intern für den NPU-Zugriff benötigt
 RUN wget -q "https://github.com/airockchip/rknn-toolkit2/raw/master/rknpu2/runtime/Linux/librknn_api/aarch64/librknnrt.so" \
          -O /usr/lib/librknnrt.so && \
     chmod 755 /usr/lib/librknnrt.so && \
@@ -35,10 +33,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py rkllm_wrapper.py download_model.sh entrypoint.sh ./
-RUN chmod +x download_model.sh entrypoint.sh
+COPY app.py rkllm_wrapper.py entrypoint.sh ./
+RUN chmod +x entrypoint.sh
 
-RUN mkdir -p /models /shared
+RUN mkdir -p /models
 
 EXPOSE 5002
 
