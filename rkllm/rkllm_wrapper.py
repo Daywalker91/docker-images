@@ -79,27 +79,13 @@ class RKLLMExtendParam(ctypes.Structure):
 
 class RKLLMParam(ctypes.Structure):
     """
-    typedef struct {
-        const char* model_path;
-        int32_t max_context_len;
-        int32_t max_new_tokens;
-        int32_t top_k;
-        int32_t n_keep;
-        float   top_p;
-        float   temperature;
-        float   repeat_penalty;
-        float   frequency_penalty;
-        float   presence_penalty;
-        int32_t mirostat;
-        float   mirostat_tau;
-        float   mirostat_eta;
-        bool    skip_special_token;
-        bool    is_async;
-        const char* img_start;
-        const char* img_end;
-        const char* img_content;
-        RKLLMExtendParam extend_param;
-    } RKLLMParam;
+    Layout 1:1 aus dem offiziellen flask_server.py Beispiel (main branch, Stand 2026),
+    bestätigt durch airockchip-Maintainer als Referenz für release-v1.3.0+.
+    Wichtiger Unterschied zur vorherigen Version: 'ignore_eos_token' zusätzlich vorhanden
+    (zwischen skip_special_token und is_async), und die img_start/img_end/img_content
+    Felder existieren NICHT mehr in RKLLMParam (wurden nach RKLLMImageInput verschoben).
+    Ein falsches Layout hier verschiebt extend_param (inkl. embed_flash/enabled_cpus_mask)
+    um mehrere Bytes und führt zu Memory Corruption / SIGSEGV in rkllm_run().
     """
     _fields_ = [
         ("model_path",         ctypes.c_char_p),
@@ -116,10 +102,8 @@ class RKLLMParam(ctypes.Structure):
         ("mirostat_tau",       ctypes.c_float),
         ("mirostat_eta",       ctypes.c_float),
         ("skip_special_token", ctypes.c_bool),
+        ("ignore_eos_token",   ctypes.c_bool),
         ("is_async",           ctypes.c_bool),
-        ("img_start",          ctypes.c_char_p),
-        ("img_end",            ctypes.c_char_p),
-        ("img_content",        ctypes.c_char_p),
         ("extend_param",       RKLLMExtendParam),
     ]
 
@@ -146,14 +130,38 @@ class RKLLMTokenInput(ctypes.Structure):
     ]
 
 
-class RKLLMMultiModalInput(ctypes.Structure):
+class RKLLMImageInput(ctypes.Structure):
     _fields_ = [
-        ("prompt",         ctypes.c_char_p),
         ("image_embed",    ctypes.POINTER(ctypes.c_float)),
         ("n_image_tokens", ctypes.c_size_t),
         ("n_image",        ctypes.c_size_t),
+        ("image_start",    ctypes.c_char_p),
+        ("image_end",      ctypes.c_char_p),
+        ("image_content",  ctypes.c_char_p),
         ("image_width",    ctypes.c_size_t),
         ("image_height",   ctypes.c_size_t),
+    ]
+
+
+class RKLLMVideoInput(ctypes.Structure):
+    _fields_ = [
+        ("video_embed",       ctypes.POINTER(ctypes.c_float)),
+        ("n_frame_tokens",    ctypes.c_size_t),
+        ("n_frame_per_video", ctypes.c_size_t),
+        ("n_video",           ctypes.c_size_t),
+        ("video_start",       ctypes.c_char_p),
+        ("video_end",         ctypes.c_char_p),
+        ("video_content",     ctypes.c_char_p),
+        ("frame_width",       ctypes.c_size_t),
+        ("frame_height",      ctypes.c_size_t),
+    ]
+
+
+class RKLLMMultiModalInput(ctypes.Structure):
+    _fields_ = [
+        ("prompt", ctypes.c_char_p),
+        ("image",  RKLLMImageInput),
+        ("video",  RKLLMVideoInput),
     ]
 
 
@@ -197,20 +205,33 @@ class RKLLMPromptCacheParam(ctypes.Structure):
     ]
 
 
+class RKLLMSamplingParam(ctypes.Structure):
+    _fields_ = [
+        ("top_k",             ctypes.c_int32),
+        ("top_p",             ctypes.c_float),
+        ("temperature",       ctypes.c_float),
+        ("repeat_penalty",    ctypes.c_float),
+        ("frequency_penalty", ctypes.c_float),
+        ("presence_penalty",  ctypes.c_float),
+        ("mirostat",          ctypes.c_int32),
+        ("mirostat_tau",      ctypes.c_float),
+        ("mirostat_eta",      ctypes.c_float),
+    ]
+
+
 class RKLLMInferParam(ctypes.Structure):
     """
-    typedef struct {
-        RKLLMInferMode mode;
-        RKLLMLoraParam* lora_params;
-        RKLLMPromptCacheParam* prompt_cache_params;
-        int keep_history;
-    } RKLLMInferParam;
+    Layout 1:1 aus dem offiziellen flask_server.py Beispiel. Zusätzlich zur
+    vorherigen Version: sampling_params (Pointer, pro-Request überschreibbar)
+    und max_new_tokens (überschreibt den Init-Wert für einen einzelnen Run).
     """
     _fields_ = [
         ("mode",                ctypes.c_int),
         ("lora_params",         ctypes.POINTER(RKLLMLoraParam)),
         ("prompt_cache_params", ctypes.POINTER(RKLLMPromptCacheParam)),
+        ("sampling_params",     ctypes.POINTER(RKLLMSamplingParam)),
         ("keep_history",        ctypes.c_int),
+        ("max_new_tokens",      ctypes.c_int32),
     ]
 
 
@@ -253,7 +274,7 @@ class RKLLMResult(ctypes.Structure):
     """
     _fields_ = [
         ("text",              ctypes.c_char_p),
-        ("token_id",          ctypes.c_int32),
+        ("token_id",          ctypes.c_int),
         ("last_hidden_layer", RKLLMResultLastHiddenLayer),
         ("logits",            RKLLMResultLogits),
         ("perf",               RKLLMPerfStat),
@@ -348,12 +369,17 @@ class RKLLMModel:
         param.top_k              = top_k
         param.top_p              = top_p
         param.skip_special_token = True
-        param.is_async            = False
+        param.ignore_eos_token   = False
+        param.is_async           = False
 
         if enabled_cpus_mask is not None:
             param.extend_param.enabled_cpus_mask = enabled_cpus_mask
         if enabled_cpus_num is not None:
             param.extend_param.enabled_cpus_num = enabled_cpus_num
+        # Defensiv wie im offiziellen Demo explizit gesetzt, statt sich auf den
+        # rkllm_createDefaultParam()-Default zu verlassen.
+        param.extend_param.base_domain_id = 0
+        param.extend_param.embed_flash = 1
 
         ret = _lib.rkllm_init(ctypes.byref(self._handle), ctypes.byref(param), self._callback)
         if ret != 0:
@@ -407,10 +433,16 @@ class RKLLMModel:
             self._queue.put(_STREAM_ERROR)
             return 0
 
-    def generate_stream(self, prompt: str, role: str = "user"):
+    def generate_stream(self, prompt: str, role: str | None = None,
+                         temperature: float | None = None, top_k: int | None = None,
+                         top_p: float | None = None, max_new_tokens: int | None = None):
         """
         Generator – yieldet Text-Chunks sobald sie von der NPU kommen.
         Am Ende steht self.last_perf mit den Performance-Stats des letzten Laufs zur Verfügung.
+
+        temperature/top_k/top_p/max_new_tokens überschreiben pro Aufruf die Init-Werte
+        (analog zum offiziellen flask_server.py Beispiel), ohne self._handle neu zu
+        initialisieren. Werden sie nicht angegeben, gelten die beim Laden gesetzten Defaults.
         """
         with self._lock:
             # Queue für diesen Aufruf leeren (Sicherheitsnetz falls noch alte Reste drin sind)
@@ -418,17 +450,42 @@ class RKLLMModel:
                 self._queue.get_nowait()
             self._last_perf = {}
 
+            # Komplett nullen statt nur einzelne Felder zu setzen – analog zum offiziellen
+            # Demo-Code (memset(&rkllm_input, 0, sizeof(RKLLMInput))), um sicherzustellen
+            # dass kein uninitialisierter Stack-/Heap-Speicher in der Struct landet.
             rkllm_input = RKLLMInput()
-            rkllm_input.role = role.encode("utf-8")
+            ctypes.memset(ctypes.byref(rkllm_input), 0, ctypes.sizeof(RKLLMInput))
+            rkllm_input.role = role.encode("utf-8") if role else None
             rkllm_input.enable_thinking = False
             rkllm_input.input_type = RKLLM_INPUT_PROMPT
             rkllm_input.prompt_input = prompt.encode("utf-8")
 
             infer_param = RKLLMInferParam()
+            ctypes.memset(ctypes.byref(infer_param), 0, ctypes.sizeof(RKLLMInferParam))
             infer_param.mode = RKLLM_INFER_GENERATE
             infer_param.lora_params = None
             infer_param.prompt_cache_params = None
             infer_param.keep_history = 0
+
+            # Pro-Request-Sampling-Parameter optional setzen (Pointer muss am Leben
+            # bleiben, solange rkllm_run() läuft -> lokale Variable im selben Scope).
+            sampling_param = None
+            if temperature is not None or top_k is not None or top_p is not None:
+                sampling_param = RKLLMSamplingParam()
+                ctypes.memset(ctypes.byref(sampling_param), 0, ctypes.sizeof(RKLLMSamplingParam))
+                sampling_param.top_k = top_k if top_k is not None else 1
+                sampling_param.top_p = top_p if top_p is not None else 0.9
+                sampling_param.temperature = temperature if temperature is not None else 0.7
+                sampling_param.repeat_penalty = 1.1
+                sampling_param.frequency_penalty = 0.0
+                sampling_param.presence_penalty = 0.0
+                sampling_param.mirostat = 0
+                sampling_param.mirostat_tau = 5.0
+                sampling_param.mirostat_eta = 0.1
+                infer_param.sampling_params = ctypes.pointer(sampling_param)
+
+            if max_new_tokens is not None:
+                infer_param.max_new_tokens = max_new_tokens
 
             t_start = time.monotonic()
             ret = _lib.rkllm_run(
@@ -460,9 +517,14 @@ class RKLLMModel:
                     raise RuntimeError("rkllm Inferenz-Fehler (Callback meldete RKLLM_RUN_ERROR)")
                 yield item
 
-    def generate(self, prompt: str, role: str = "user") -> str:
+    def generate(self, prompt: str, role: str | None = None,
+                 temperature: float | None = None, top_k: int | None = None,
+                 top_p: float | None = None, max_new_tokens: int | None = None) -> str:
         """Blockierende Inferenz – sammelt den Stream und gibt den vollständigen Text zurück."""
-        return "".join(self.generate_stream(prompt, role=role))
+        return "".join(self.generate_stream(
+            prompt, role=role, temperature=temperature,
+            top_k=top_k, top_p=top_p, max_new_tokens=max_new_tokens,
+        ))
 
     @property
     def last_perf(self) -> dict:
