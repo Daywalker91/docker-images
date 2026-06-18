@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'rknn-llm Version zum Testen (z.B. v1.2.1). Leer lassen für automatische neueste Version.'
+        description: 'rknn-llm Version zum Testen (z.B. release-v1.2.1). Leer lassen für automatische neueste Version.'
         required: false
         type: string
 
