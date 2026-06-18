@@ -10,6 +10,7 @@ HuggingFace geladen und im PVC gecacht. Kein Pod-Neustart für einen Modellwechs
 import json
 import logging
 import os
+import resource
 import threading
 import time
 from pathlib import Path
@@ -19,6 +20,16 @@ from huggingface_hub import hf_hub_download
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s:%(name)s:%(message)s")
 log = logging.getLogger(__name__)
+
+# File-Descriptor-Limit erhöhen, analog zum offiziellen flask_server.py Beispiel
+# (resource.setrlimit(RLIMIT_NOFILE, (102400, 102400)) vor rkllm_init()). Testweise
+# ergänzt für Issue airockchip/rknn-llm#509 – falls release-v1.3.0 intern mehr
+# File-Handles braucht als das Default-Limit erlaubt, könnte das den SIGSEGV erklären.
+try:
+    resource.setrlimit(resource.RLIMIT_NOFILE, (102400, 102400))
+    log.info("RLIMIT_NOFILE auf 102400 gesetzt")
+except (ValueError, OSError) as e:
+    log.warning("RLIMIT_NOFILE konnte nicht gesetzt werden: %s", e)
 
 app = Flask(__name__)
 
