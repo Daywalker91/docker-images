@@ -14,18 +14,19 @@ else
     echo "WARN: Keine DRI Devices gefunden – NPU möglicherweise nicht verfügbar"
 fi
 
-# NPU Frequenz: nicht fixiert, Governor regelt dynamisch (devfreq Standardverhalten).
-# Falls die Performance nicht ausreicht, kann hier optional die Frequenz auf
-# Maximum (1GHz) fixiert werden, wie beim rk-llama.cpp Container:
-#
-# if [ -f /sys/class/devfreq/fdab0000.npu/governor ]; then
-#     echo "INFO: Setze NPU Governor auf userspace und fixiere Frequenz auf 1GHz"
-#     echo userspace > /sys/class/devfreq/fdab0000.npu/governor
-#     echo 1000000000 > /sys/class/devfreq/fdab0000.npu/userspace/set_freq
-#     echo "INFO: NPU Frequenz: $(cat /sys/class/devfreq/fdab0000.npu/cur_freq)"
-# else
-#     echo "WARN: NPU devfreq nicht gefunden – Frequenz nicht gesetzt"
-# fi
+# NPU Frequenz auf Maximum (1GHz) fixieren, Governor auf userspace.
+# War zuvor auskommentiert (unbestätigt ob nötig). Reaktiviert als Test,
+# da das offizielle flask_server.py Beispiel ein analoges fix_freq_*.sh
+# Skript vor rkllm_init() ausführt – möglicher fehlender Baustein für den
+# SIGSEGV-Bug in release-v1.3.0 (Issue airockchip/rknn-llm#509).
+if [ -f /sys/class/devfreq/fdab0000.npu/governor ]; then
+    echo "INFO: Setze NPU Governor auf userspace und fixiere Frequenz auf 1GHz"
+    echo userspace > /sys/class/devfreq/fdab0000.npu/governor
+    echo 1000000000 > /sys/class/devfreq/fdab0000.npu/userspace/set_freq
+    echo "INFO: NPU Frequenz: $(cat /sys/class/devfreq/fdab0000.npu/cur_freq)"
+else
+    echo "WARN: NPU devfreq nicht gefunden – Frequenz nicht gesetzt"
+fi
 
 echo "INFO: Starte RKLLM Wrapper auf Port 5002..."
 echo "INFO: RKLLM_ENABLED_CPUS_MASK=${RKLLM_ENABLED_CPUS_MASK:-<default>}"
