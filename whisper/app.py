@@ -97,6 +97,21 @@ def worker_transcribe(job_id: str, audio_path: str, backend: str, model: str):
         log.error(f"Job {job_id} fehlgeschlagen: {e}")
         set_job(job_id, status="error", error=str(e))
 
+def worker_preload(job_id: str, backend: str, model: str):
+    set_job(job_id, status="processing", progress=10)
+    try:
+        if backend == "rknn":
+            ensure_rknn_models(model)
+            set_job(job_id, progress=50)
+            load_rknn_model(model)
+        else:
+            ensure_cpu_model(model)
+        set_job(job_id, status="done", progress=100, model=model, backend=backend)
+        log.info(f"Preload-Job {job_id} abgeschlossen ({backend}/{model})")
+    except Exception as e:
+        log.error(f"Preload-Job {job_id} fehlgeschlagen: {e}")
+        set_job(job_id, status="error", error=str(e))
+
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 @app.route("/transcribe", methods=["POST"])
@@ -153,8 +168,37 @@ def health():
         "status":       "ok" if model_ok else "degraded",
         "model":        WHISPER_MODEL,
         "model_loaded": model_ok,
-        "backend":      WHISPER_BACKEND,
-    })
+        "backend":      WHISPER_BACKEND})
+
+
+@app.route("/preload", methods=["POST"])
+def preload():
+    """
+    Lädt das Modell proaktiv herunter/bereit, ohne eine echte
+    Transkription auszuführen. Nützlich für einen "Modell laden"-
+    Button in der UI, da /health nur prüft ob die Datei existiert,
+    aber sie nie selbst herunterlädt.
+    """
+    data    = request.get_json(silent=True) or {}
+    backend = data.get("backend", WHISPER_BACKEND)
+    model   = data.get("model",   WHISPER_MODEL)
+
+    if backend not in ("cpu", "rknn"):
+        return jsonify({"error": f"Ungültiges Backend: {backend}"}), 400
+    if model not in ("tiny", "base", "small", "medium"):
+        return jsonify({"error": f"Ungültiges Modell: {model}"}), 400
+
+    job_id = str(uuid.uuid4())
+    with jobs_lock:
+        jobs[job_id] = {"status": "queued", "progress": 0, "backend": backend,
+                         "model": model, "type": "preload"}
+
+    threading.Thread(target=worker_preload,
+                     args=(job_id, backend, model),
+                     daemon=True).start()
+
+    log.info(f"Preload-Job {job_id} gestartet – backend={backend}, model={model}")
+    return jsonify({"job_id": job_id, "status": "queued"})
 
 
 if __name__ == "__main__":
