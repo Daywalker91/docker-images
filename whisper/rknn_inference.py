@@ -1,9 +1,17 @@
 """
 Whisper RKNN Inferenz via rknnlite.
 Nutzt die konvertierten Encoder + Decoder .rknn Modelle vom GitHub Release.
+
+Audio-Preprocessing und Tokenizer laufen über whisper_audio.py statt über
+das openai-whisper Python-Paket – das spart die ~1GB+ PyTorch-Abhängigkeit,
+die hier ohnehin nie für tatsächliche Modell-Inferenz genutzt wurde (die
+läuft komplett über RKNN). whisper_audio.py ist 1:1 gegen den echten
+openai-whisper Quellcode verifiziert (siehe Kommentare dort).
 """
 import logging
 import numpy as np
+
+import whisper_audio as whisper
 
 log = logging.getLogger(__name__)
 
@@ -48,12 +56,10 @@ class WhisperRKNN:
         WAV-Datei → Transkript via RKNN NPU.
         language: ISO-639-1 Code (z.B. 'de', 'en') oder 'auto' für Erkennung.
         """
-        import whisper
-
         # ── Audio → Mel-Spektrogramm ──────────────────────────────────────────
         audio = whisper.load_audio(wav_path)
         audio = whisper.pad_or_trim(audio)
-        mel = whisper.log_mel_spectrogram(audio).numpy()
+        mel = whisper.log_mel_spectrogram(audio)
         mel = mel[np.newaxis, :].astype(np.float32)  # (1, 80, 3000)
 
         # ── Encoder ───────────────────────────────────────────────────────────
@@ -61,7 +67,10 @@ class WhisperRKNN:
         encoder_output = encoder_output.astype(np.float32)
 
         # ── Tokenizer ─────────────────────────────────────────────────────────
-        tokenizer = whisper.tokenizer.get_tokenizer(
+        # "auto" wird hier wie multilingual mit Default-Sprache "en" behandelt;
+        # echte Spracherkennung würde einen zusätzlichen Encoder-Inferenzschritt
+        # brauchen, den das aktuelle RKNN-Setup nicht abbildet.
+        tokenizer = whisper.get_tokenizer(
             multilingual=True,
             language=None if language == "auto" else language,
             task="transcribe",
