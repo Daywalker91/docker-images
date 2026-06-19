@@ -17,7 +17,7 @@ BASE_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
 URL="${BASE_URL}/ggml-${MODEL}.bin"
 
 mkdir -p "$MODEL_DIR"
-wget -q --show-progress -O "$MODEL_FILE" "$URL"
+wget -q --progress=dot:giga -O "$MODEL_FILE" "$URL"
 
 if [ $? -eq 0 ]; then
     echo "✅ Modell gespeichert: $MODEL_FILE"
