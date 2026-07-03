@@ -63,10 +63,12 @@ def worker_url(job_id: str, url: str, temp_prefix: str, output_path: str):
         )
         title = ""
         description = ""
+        thumbnail = ""
         if meta_result.returncode == 0:
             meta = json.loads(meta_result.stdout)
             title       = meta.get("title", "")
             description = meta.get("description", "")
+            thumbnail   = meta.get("thumbnail", "")
 
         # Schritt 2: Audio herunterladen
         set_job(job_id, status="downloading", progress=20)
@@ -102,7 +104,8 @@ def worker_url(job_id: str, url: str, temp_prefix: str, output_path: str):
                 filename=os.path.basename(output_path),
                 title=title,
                 description=description,
-                has_description=len(description) > 100)
+                has_description=len(description) > 100,
+                thumbnail_url=thumbnail)
         app.logger.info(f"[{job_id}] url extract done")
 
     except subprocess.TimeoutExpired:
