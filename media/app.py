@@ -1,10 +1,12 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 import subprocess
 import os
 import uuid
 import logging
 import threading
 import json
+import glob
+import shutil
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -37,6 +39,51 @@ def to_wav_16k_mono(input_path: str, output_path: str):
         return False, str(e)
 
 
+IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+
+
+def thumbnail_path(job_id: str) -> str:
+    return os.path.join(AUDIO_OUTPUT_DIR, f"{job_id}.jpg")
+
+
+def frame_from_video(video_path: str, out_path: str) -> bool:
+    """Standbild aus einem Video als JPG (bei ~30 % der Laufzeit – der Anfang
+    ist bei Reels oft ein Titelbild oder schwarz). Liefert True bei Erfolg."""
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", video_path],
+            capture_output=True, text=True, timeout=30,
+        )
+        duration = float(probe.stdout.strip() or 0)
+    except Exception:
+        duration = 0
+    seek = f"{duration * 0.3:.2f}" if duration > 1 else "0"
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-ss", seek, "-i", video_path, "-frames:v", "1",
+             "-vf", "scale='min(1280,iw)':-2", "-q:v", "3", out_path],
+            capture_output=True, text=True, timeout=60,
+        )
+        return result.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0
+    except Exception:
+        return False
+
+
+def image_to_jpg(src: str, out_path: str) -> bool:
+    """Heruntergeladenes Thumbnail (webp/png/…) einheitlich als JPG speichern."""
+    if src.lower().endswith((".jpg", ".jpeg")):
+        shutil.move(src, out_path)
+        return True
+    try:
+        result = subprocess.run(["ffmpeg", "-y", "-i", src, "-q:v", "3", out_path],
+                                capture_output=True, text=True, timeout=60)
+        return result.returncode == 0 and os.path.exists(out_path)
+    finally:
+        if os.path.exists(src):
+            os.remove(src)
+
+
 def worker_local(job_id: str, input_path: str, output_path: str):
     """Background-Worker für lokale Datei-Extraktion."""
     try:
@@ -45,8 +92,13 @@ def worker_local(job_id: str, input_path: str, output_path: str):
         if not success:
             set_job(job_id, status="error", progress=0, error=f"ffmpeg fehlgeschlagen: {error}")
             return
+        # Vorschaubild aus dem Video (bei reinen Audiodateien schlägt das still fehl)
+        thumb = thumbnail_path(job_id)
+        has_thumb = frame_from_video(input_path, thumb)
+
         set_job(job_id, status="done", progress=100, audio_path=output_path,
-                filename=os.path.basename(output_path))
+                filename=os.path.basename(output_path),
+                thumbnail_file=os.path.basename(thumb) if has_thumb else "")
         app.logger.info(f"[{job_id}] local extract done")
     except Exception as e:
         set_job(job_id, status="error", progress=0, error=str(e))
@@ -72,8 +124,11 @@ def worker_url(job_id: str, url: str, temp_prefix: str, output_path: str):
 
         # Schritt 2: Audio herunterladen
         set_job(job_id, status="downloading", progress=20)
+        # --write-thumbnail: Vorschaubild sofort mitnehmen – Social-Media-
+        # Thumbnail-Links sind signiert und laufen schnell ab
         result = subprocess.run(
             ["yt-dlp", "-x", "--audio-format", "best", "--no-playlist",
+             "--write-thumbnail",
              "-o", temp_prefix + ".%(ext)s", url],
             capture_output=True, text=True, timeout=600,
         )
@@ -81,9 +136,35 @@ def worker_url(job_id: str, url: str, temp_prefix: str, output_path: str):
             set_job(job_id, status="error", progress=0, error=f"yt-dlp fehlgeschlagen: {result.stderr}")
             return
 
-        # Temp-Datei finden
+        # Vorschaubild (falls geschrieben) von der Audiodatei trennen
+        prefix = os.path.basename(temp_prefix)
+        thumb = thumbnail_path(job_id)
+        has_thumb = False
+        for f in os.listdir(AUDIO_OUTPUT_DIR):
+            if f.startswith(prefix) and f.lower().endswith(IMAGE_EXTS):
+                if not has_thumb:
+                    has_thumb = image_to_jpg(os.path.join(AUDIO_OUTPUT_DIR, f), thumb)
+                elif os.path.exists(os.path.join(AUDIO_OUTPUT_DIR, f)):
+                    os.remove(os.path.join(AUDIO_OUTPUT_DIR, f))
+
+        # Kein Thumbnail (z.B. manche Facebook-Reels): kleinste Videoversion
+        # laden und ein Standbild herausschneiden
+        if not has_thumb:
+            set_job(job_id, status="downloading", progress=60)
+            vid = subprocess.run(
+                ["yt-dlp", "-f", "worst[vcodec!=none]/worst", "--no-playlist",
+                 "-o", temp_prefix + "_video.%(ext)s", url],
+                capture_output=True, text=True, timeout=300,
+            )
+            for f in glob.glob(temp_prefix + "_video.*"):
+                if vid.returncode == 0 and not has_thumb:
+                    has_thumb = frame_from_video(f, thumb)
+                os.remove(f)
+
+        # Temp-Audiodatei finden
         temp_files = [f for f in os.listdir(AUDIO_OUTPUT_DIR)
-                      if f.startswith(os.path.basename(temp_prefix))]
+                      if f.startswith(prefix) and not f.lower().endswith(IMAGE_EXTS)
+                      and "_video." not in f]
         if not temp_files:
             set_job(job_id, status="error", progress=0, error="yt-dlp hat keine Ausgabedatei erzeugt")
             return
@@ -105,7 +186,8 @@ def worker_url(job_id: str, url: str, temp_prefix: str, output_path: str):
                 title=title,
                 description=description,
                 has_description=len(description) > 100,
-                thumbnail_url=thumbnail)
+                thumbnail_url=thumbnail,
+                thumbnail_file=os.path.basename(thumb) if has_thumb else "")
         app.logger.info(f"[{job_id}] url extract done")
 
     except subprocess.TimeoutExpired:
@@ -177,6 +259,31 @@ def job_status(job_id):
     if not job:
         return jsonify({"error": "Job nicht gefunden"}), 404
     return jsonify(job)
+
+
+# ─── GET /thumbnail/<job_id> ──────────────────────────────────────────────────
+# Liefert das beim Job gesicherte Vorschaubild (JPG) oder 404.
+@app.route("/thumbnail/<job_id>", methods=["GET"])
+def thumbnail(job_id):
+    path = thumbnail_path(os.path.basename(job_id))
+    if not os.path.exists(path):
+        return jsonify({"error": "Kein Vorschaubild"}), 404
+    return send_file(path, mimetype="image/jpeg")
+
+
+# ─── DELETE /file/<filename> ──────────────────────────────────────────────────
+# Räumt nach dem Import auf: Audiodatei + Vorschaubild desselben Jobs.
+# (Die App ruft das nach dem Speichern auf – mediaDeleteFile() in PHP.)
+@app.route("/file/<filename>", methods=["DELETE"])
+def delete_file(filename):
+    name = os.path.basename(filename)
+    job_id = os.path.splitext(name)[0]
+    removed = []
+    for path in (os.path.join(AUDIO_OUTPUT_DIR, name), thumbnail_path(job_id)):
+        if os.path.isfile(path):
+            os.remove(path)
+            removed.append(os.path.basename(path))
+    return jsonify({"ok": True, "removed": removed})
 
 
 # ─── GET /health ──────────────────────────────────────────────────────────────
