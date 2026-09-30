@@ -1,0 +1,209 @@
+name: Multiarch-Build (wiederverwendbar)
+
+# Wird von whisper.yml, php-apache.yml und ollama.yml aufgerufen.
+# Jede Plattform wird dort gebaut, wo sie am schnellsten ist:
+#   - amd64  → GitHub-Runner (nativ)
+#   - arm64  → eigener RK3588-Runner (nativ, ohne QEMU); ist der offline,
+#              automatisch GitHub-Runner mit QEMU
+#   - arm/v7 → GitHub-Runner mit QEMU (optional)
+# Danach werden die Einzel-Images zu einem Multiarch-Manifest
+# (:latest + :<commit-sha>) zusammengeführt.
+#
+# Sicherheit: Das Repo ist öffentlich und der eigene Runner läuft
+# privilegiert mit Zugriff auf den containerd-Socket des Knotens.
+# Aufrufende Workflows dürfen NIEMALS einen pull_request-Trigger haben –
+# sonst könnten Forks Code auf dem Cluster ausführen.
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: 'Image ohne Tag, z.B. ghcr.io/daywalker91/whisper'
+        type: string
+        required: true
+      context:
+        description: 'Build-Kontext, z.B. ./whisper'
+        type: string
+        required: true
+      armv7:
+        description: 'Zusätzlich linux/arm/v7 bauen'
+        type: boolean
+        default: false
+      arm64_runner:
+        description: 'auto | self-hosted | github'
+        type: string
+        default: auto
+    secrets:
+      GH_PAT:
+        required: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Wo wird arm64 gebaut? Ein offline Runner würde den Job 24 h in der
+  # Warteschlange festhalten (timeout-minutes zählt die Wartezeit nicht
+  # mit) – daher vorher fragen und notfalls auf GitHub ausweichen.
+  # ──────────────────────────────────────────────
+  runner:
+    runs-on: ubuntu-latest
+    outputs:
+      self_hosted: ${{ steps.runner.outputs.self_hosted }}
+    steps:
+      - name: Eigenen RK3588-Runner prüfen
+        id: runner
+        env:
+          CHOICE: ${{ inputs.arm64_runner }}
+        run: |
+          if [ "$CHOICE" = "self-hosted" ]; then SELF=true
+          elif [ "$CHOICE" = "github" ]; then SELF=false
+          else
+            ONLINE=$(curl -s \
+              -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runners" \
+              | jq '[.runners[]? | select(.status == "online") | select(any(.labels[]; .name == "rk3588"))] | length')
+            if [ "${ONLINE:-0}" -gt 0 ]; then SELF=true; else SELF=false; fi
+          fi
+          echo "self_hosted=$SELF" >> $GITHUB_OUTPUT
+          echo "arm64 wird gebaut auf: $([ "$SELF" = true ] && echo 'eigenem RK3588-Runner (nativ)' || echo 'GitHub-Runner (QEMU)')"
+
+  # ──────────────────────────────────────────────
+  # amd64 auf GitHub (nativ)
+  # ──────────────────────────────────────────────
+  build-amd64:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build & Push (amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: ${{ inputs.image }}:latest-amd64
+          cache-from: type=gha,scope=${{ inputs.context }}-amd64
+          cache-to: type=gha,mode=max,scope=${{ inputs.context }}-amd64
+
+  # ──────────────────────────────────────────────
+  # arm64 – nativ auf dem eigenen Runner, sonst GitHub mit QEMU
+  # ──────────────────────────────────────────────
+  build-arm64:
+    needs: runner
+    runs-on: ${{ needs.runner.outputs.self_hosted == 'true' && fromJSON('["self-hosted","linux","arm64","rk3588"]') || 'ubuntu-latest' }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── eigener Runner: nerdctl + BuildKit auf dem Knoten ──
+      - name: Login bei ghcr.io (eigener Runner)
+        if: needs.runner.outputs.self_hosted == 'true'
+        run: |
+          echo "${{ secrets.GH_PAT }}" | \
+          nerdctl --address /run/k3s/containerd/containerd.sock \
+            login ghcr.io -u Daywalker91 --password-stdin
+
+      - name: Build & Push (arm64, nativ)
+        if: needs.runner.outputs.self_hosted == 'true'
+        run: |
+          nerdctl --address /run/k3s/containerd/containerd.sock \
+            build --platform linux/arm64 -t ${{ inputs.image }}:latest-arm64 ${{ inputs.context }}
+          nerdctl --address /run/k3s/containerd/containerd.sock \
+            push --platform linux/arm64 ${{ inputs.image }}:latest-arm64
+
+      # ── Ausweichweg: GitHub-Runner mit QEMU ──
+      - uses: docker/setup-qemu-action@v3
+        if: needs.runner.outputs.self_hosted != 'true'
+      - uses: docker/setup-buildx-action@v3
+        if: needs.runner.outputs.self_hosted != 'true'
+      - uses: docker/login-action@v3
+        if: needs.runner.outputs.self_hosted != 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build & Push (arm64, QEMU)
+        if: needs.runner.outputs.self_hosted != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          platforms: linux/arm64
+          push: true
+          provenance: false
+          tags: ${{ inputs.image }}:latest-arm64
+          cache-from: type=gha,scope=${{ inputs.context }}-arm64
+          cache-to: type=gha,mode=max,scope=${{ inputs.context }}-arm64
+
+  # ──────────────────────────────────────────────
+  # arm/v7 auf GitHub mit QEMU (optional)
+  # ──────────────────────────────────────────────
+  build-armv7:
+    if: inputs.armv7
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build & Push (arm/v7, QEMU)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          platforms: linux/arm/v7
+          push: true
+          provenance: false
+          tags: ${{ inputs.image }}:latest-armv7
+          cache-from: type=gha,scope=${{ inputs.context }}-armv7
+          cache-to: type=gha,mode=max,scope=${{ inputs.context }}-armv7
+
+  # ──────────────────────────────────────────────
+  # Multiarch-Manifest zusammenführen
+  # ──────────────────────────────────────────────
+  merge:
+    needs: [build-amd64, build-arm64, build-armv7]
+    if: >
+      !cancelled() &&
+      needs.build-amd64.result == 'success' &&
+      needs.build-arm64.result == 'success' &&
+      (needs.build-armv7.result == 'success' || needs.build-armv7.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Multiarch-Manifest erstellen (latest + Commit-SHA)
+        run: |
+          SOURCES="${{ inputs.image }}:latest-amd64 ${{ inputs.image }}:latest-arm64"
+          if [ "${{ inputs.armv7 }}" = "true" ]; then SOURCES="$SOURCES ${{ inputs.image }}:latest-armv7"; fi
+          docker buildx imagetools create \
+            -t ${{ inputs.image }}:latest \
+            -t ${{ inputs.image }}:${{ github.sha }} \
+            $SOURCES
+          docker buildx imagetools inspect ${{ inputs.image }}:latest
