@@ -13,11 +13,11 @@ on:
       arm64_runner:
         description: 'Wo arm64 gebaut wird'
         type: choice
-        default: auto
+        default: github
         options:
+          - github        # Standard für ollama (siehe unten)
           - auto          # eigener RK3588-Runner, falls online – sonst GitHub
           - self-hosted   # erzwingen: eigener Runner
-          - github        # erzwingen: GitHub-Runner (QEMU, langsam)
 
 # Node.js 24 opt-in (Pflicht ab 02.06.2026)
 env:
@@ -93,7 +93,11 @@ jobs:
       image: ghcr.io/daywalker91/ollama
       context: ./ollama
       armv7: false
-      arm64_runner: ${{ inputs.arm64_runner || 'auto' }}
+      # Standard GitHub statt eigener Runner: Das Dockerfile kompiliert nichts
+      # (nur FROM ollama/ollama + COPY), nativ bringt also keinen Gewinn – aber
+      # das 2,65 GB große Basis-Image würde auf dem Knoten entpackt; der Job
+      # wurde dabei am 2026-10-01 mit Exit 143 (SIGTERM) abgebrochen.
+      arm64_runner: ${{ inputs.arm64_runner || 'github' }}
     secrets: inherit
 
   # ──────────────────────────────────────────────
