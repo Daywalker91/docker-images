@@ -7,6 +7,7 @@ import threading
 import json
 import glob
 import shutil
+import time
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -14,6 +15,43 @@ logging.basicConfig(level=logging.INFO)
 # Shared Volume Pfad (überschreibbar per Env-Variable)
 AUDIO_OUTPUT_DIR = os.environ.get("AUDIO_OUTPUT_DIR", "/shared/audio")
 os.makedirs(AUDIO_OUTPUT_DIR, exist_ok=True)
+
+# Ablage für hochgeladene Videos: die App (PHP) legt die Datei hier auf dem
+# gemeinsamen Volume ab und nennt /extract/local nur noch den Pfad. Nach der
+# Verarbeitung wird die Datei gelöscht – das Video selbst wird nie behalten.
+UPLOAD_DIR = os.path.join(AUDIO_OUTPUT_DIR, "uploads")
+UPLOAD_MAX_AGE_SECONDS = 24 * 3600
+
+
+def is_upload_path(path: str) -> bool:
+    """True, wenn der Pfad (nach Auflösen von ../ und Symlinks) im Upload-Ordner liegt."""
+    try:
+        real = os.path.realpath(path)
+        base = os.path.realpath(UPLOAD_DIR)
+        return os.path.commonpath([real, base]) == base and real != base
+    except (ValueError, OSError):
+        return False
+
+
+def remove_upload(path: str) -> None:
+    """Hochgeladene Quelldatei löschen (nur innerhalb des Upload-Ordners)."""
+    try:
+        if is_upload_path(path) and os.path.isfile(path):
+            os.remove(path)
+    except OSError as e:
+        app.logger.warning(f"Upload konnte nicht gelöscht werden: {path} ({e})")
+
+
+def cleanup_stale_uploads() -> None:
+    """Liegengebliebene Uploads (z.B. nach einem Pod-Neustart mitten im Job) wegräumen."""
+    try:
+        now = time.time()
+        for name in os.listdir(UPLOAD_DIR):
+            full = os.path.join(UPLOAD_DIR, name)
+            if os.path.isfile(full) and now - os.path.getmtime(full) > UPLOAD_MAX_AGE_SECONDS:
+                os.remove(full)
+    except OSError:
+        pass
 
 # In-Memory Job-Store { job_id: { status, progress, audio_path, title, description, has_description, error } }
 jobs = {}
@@ -102,6 +140,9 @@ def worker_local(job_id: str, input_path: str, output_path: str):
         app.logger.info(f"[{job_id}] local extract done")
     except Exception as e:
         set_job(job_id, status="error", progress=0, error=str(e))
+    finally:
+        # Das hochgeladene Video wird nicht aufbewahrt – egal ob es geklappt hat
+        remove_upload(input_path)
 
 
 def worker_url(job_id: str, url: str, temp_prefix: str, output_path: str):
@@ -197,17 +238,24 @@ def worker_url(job_id: str, url: str, temp_prefix: str, output_path: str):
 
 
 # ─── POST /extract/local ──────────────────────────────────────────────────────
-# Erwartet: { "path": "/shared/uploads/video.mp4" }
+# Erwartet: { "path": "/shared/audio/uploads/<zufall>.mp4" }
+# Die Datei muss im Upload-Ordner des gemeinsamen Volumes liegen (die App legt
+# sie dort ab) und wird nach der Verarbeitung gelöscht. Andere Pfade werden
+# abgelehnt – sonst ließe sich jede Datei im Container durch ffmpeg schicken.
 # Gibt zurück: { "job_id": "abc123", "status": "queued" }
 @app.route("/extract/local", methods=["POST"])
 def extract_local():
-    data = request.get_json()
+    data = request.get_json(silent=True)
     if not data or "path" not in data:
-        return jsonify({"error": "Parameter 'path' fehlt"}), 400
+        return jsonify({"error": "Parameter 'path' fehlt (JSON erwartet)"}), 400
 
-    input_path = data["path"]
-    if not os.path.exists(input_path):
-        return jsonify({"error": f"Datei nicht gefunden: {input_path}"}), 404
+    input_path = str(data["path"])
+    if not is_upload_path(input_path):
+        return jsonify({"error": "Pfad liegt nicht im Upload-Ordner"}), 400
+    if not os.path.isfile(input_path):
+        return jsonify({"error": "Datei nicht gefunden"}), 404
+
+    cleanup_stale_uploads()
 
     job_id      = str(uuid.uuid4())
     output_path = os.path.join(AUDIO_OUTPUT_DIR, f"{job_id}.wav")
