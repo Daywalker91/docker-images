@@ -47,25 +47,41 @@ image: ghcr.io/daywalker91/media:latest
 
 ### whisper
 Audio-Transkription via whisper.cpp.  
-Enthält: whisper.cpp Binary (CPU), rknnlite (arm64), Flask REST-API
+Enthält: whisper.cpp Binary (CPU, auf arm64 mit ARMv8.2 dotprod/fp16), librknnrt (arm64), Flask REST-API
 
 **Endpunkte:**
-- `POST /transcribe` – WAV → Transkript
+- `POST /transcribe` – `{"audio_path", "model", "backend", "language"}` → Job-ID
+- `GET /job/<id>` – Status und Transkript
+- `POST /preload` – Modell vorab herunterladen/laden
 - `GET /health`
 
 **Env-Variablen:**
 ```
 WHISPER_MODEL=tiny|base|small|medium   (Standard: base)
 WHISPER_BACKEND=cpu|rknn               (Standard: cpu)
+WHISPER_THREADS=4
+WHISPER_CPU_AFFINITY=4-7               (arm64: A76-Kerne; leer = keine Bindung)
+WHISPER_BEAM_SIZE=5                    (1 = greedy, ~30 % schneller)
 WHISPER_MODEL_DIR=/models
 RKNN_MODEL_DIR=/models/rknn
 ```
 
 **RKNN-Backend (NPU):**
-- Setzt `WHISPER_BACKEND=rknn`
-- Lädt `.rknn` Modelle automatisch vom GitHub Release [`whisper-rknn-models`](../../releases/tag/whisper-rknn-models)
-- Läuft nur auf arm64 (RK3588)
-- Konvertierung via [Colab-Notebook](./colab/whisper_rknn_convert.ipynb) ✅
+- `backend: "rknn"` im Request (oder `WHISPER_BACKEND=rknn`), nur `tiny` und `base`; andere Größen laufen auf der CPU
+- Encoder + Decoder mit KV-Cache, Modelle von [sherpa-onnx](https://modelscope.cn/models/csukuangfj/2026-01-05-rknn) (rknn-toolkit2 2.1.0), daher librknnrt 2.1.0 – neuere Runtimes stürzen mit diesen Modellen ab
+- Zugriff über die C-API mit Zero-Copy (`rknn_zc.py`) statt rknnlite
+- Lange Aufnahmen in ≤ 30-s-Fenster an leisen Stellen geteilt, Sprache wird erkannt oder per `language` vorgegeben
+
+**Messung RK1, 198 s deutsches Audio (2026-10-21):**
+
+| Variante | Zeit | Wortfehler |
+|---|---|---|
+| CPU base | 31 s | 27,5 % |
+| CPU base, `WHISPER_BEAM_SIZE=1` | 20 s | 30 % |
+| CPU small | 82 s | 25,5 % |
+| NPU base | ~95 s | 30 % |
+
+Die NPU ist langsamer als die CPU, hält diese aber frei.
 
 ```yaml
 image: ghcr.io/daywalker91/whisper:latest
@@ -161,14 +177,14 @@ PHP-Container
 
 | Release Tag | Inhalt | Status |
 |-------------|--------|--------|
-| `whisper-rknn-models` | Whisper base Encoder + Decoder `.rknn` für RK3588 | ✅ |
+| `whisper-rknn-models` | Whisper base Encoder + Decoder `.rknn` (alter Export ohne KV-Cache, wird nicht mehr genutzt) | ⚠️ veraltet |
 | `qwen2.5-rkllm-models` | Qwen2.5-1.5B `.rkllm` für RK3588 | ⏳ ausstehend |
 
 ## Colab-Notebooks
 
 | Notebook | Zweck | Status |
 |----------|-------|--------|
-| [whisper_rknn_convert.ipynb](./colab/whisper_rknn_convert.ipynb) | Whisper → ONNX → RKNN, Upload zu GitHub Release | ✅ |
+| [whisper_rknn_convert.ipynb](./colab/whisper_rknn_convert.ipynb) | Whisper → ONNX → RKNN, Upload zu GitHub Release (alter Export, wird nicht mehr genutzt) | ⚠️ veraltet |
 | qwen2.5_rkllm_convert.ipynb | Qwen2.5 → RKLLM Konvertierung | ⏳ ausstehend |
 
 ## Setup (einmalig)

@@ -8,11 +8,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 RUN git clone --depth=1 https://github.com/ggerganov/whisper.cpp /whisper.cpp
 WORKDIR /whisper.cpp
-RUN cmake -B build \
+# arm64: ARMv8.2 mit dotprod + fp16 (RK3588, Cortex-A76/A55). Ohne diese Flags
+# baut ggml nur generisches ARMv8 – auf dem RK1 gemessen ~3x langsamer
+# (base: 89 s statt 31 s für 198 s deutsches Audio).
+ARG TARGETARCH
+RUN ARM_FLAGS=""; \
+    if [ "$TARGETARCH" = "arm64" ] || [ "$(uname -m)" = "aarch64" ]; then \
+        ARM_FLAGS="-DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16"; \
+    fi; \
+    cmake -B build \
     -DCMAKE_BUILD_TYPE=Release \
     -DGGML_NATIVE=OFF \
+    $ARM_FLAGS \
     -DBUILD_SHARED_LIBS=OFF \
-    && cmake --build build --config Release -j$(nproc)
+    && cmake --build build --config Release -j$(nproc) --target whisper-cli
 
 RUN cp build/bin/whisper-cli /usr/local/bin/whisper-cli 2>/dev/null || \
     cp build/bin/main /usr/local/bin/whisper-cli 2>/dev/null || \
@@ -38,14 +47,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /usr/local/bin/whisper-cli /usr/local/bin/whisper-cli
 RUN chmod +x /usr/local/bin/whisper-cli && whisper-cli --help || echo "FEHLER: Binary nicht funktionsfähig"
 
-# rknnlite nur auf arm64 – separates Script um Shell-Expansion-Probleme zu vermeiden
-COPY install_rknnlite.sh /tmp/install_rknnlite.sh
-RUN chmod +x /tmp/install_rknnlite.sh && /tmp/install_rknnlite.sh && rm /tmp/install_rknnlite.sh
+# RKNN Runtime nur auf arm64 (NPU-Zugriff über die C-API, siehe rknn_zc.py)
+COPY install_rknnrt.sh /tmp/install_rknnrt.sh
+RUN chmod +x /tmp/install_rknnrt.sh && /tmp/install_rknnrt.sh && rm /tmp/install_rknnrt.sh
 
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY app.py download_model.sh download_rknn_models.sh rknn_inference.py whisper_audio.py ./
+COPY app.py download_model.sh download_rknn_models.sh rknn_inference.py rknn_zc.py whisper_audio.py ./
 RUN chmod +x download_model.sh download_rknn_models.sh
 RUN mkdir -p /models/rknn /shared/audio
 EXPOSE 5001
