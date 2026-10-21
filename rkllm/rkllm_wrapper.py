@@ -157,11 +157,24 @@ class RKLLMVideoInput(ctypes.Structure):
     ]
 
 
+class RKLLMAudioInput(ctypes.Structure):
+    """Neu in release-v1.3.1 – vergrößert RKLLMMultiModalInput und damit die RKLLMInput-Union."""
+    _fields_ = [
+        ("audio_embed",    ctypes.POINTER(ctypes.c_float)),
+        ("n_audio_tokens", ctypes.c_size_t),
+        ("n_audio",        ctypes.c_size_t),
+        ("audio_start",    ctypes.c_char_p),
+        ("audio_end",      ctypes.c_char_p),
+        ("audio_content",  ctypes.c_char_p),
+    ]
+
+
 class RKLLMMultiModalInput(ctypes.Structure):
     _fields_ = [
         ("prompt", ctypes.c_char_p),
         ("image",  RKLLMImageInput),
         ("video",  RKLLMVideoInput),
+        ("audio",  RKLLMAudioInput),
     ]
 
 
@@ -288,6 +301,32 @@ LLMResultCallback = ctypes.CFUNCTYPE(
     ctypes.c_void_p,
     ctypes.c_int,
 )
+LLMTokenizerCallback = ctypes.CFUNCTYPE(
+    ctypes.c_int, ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int32,
+    ctypes.POINTER(ctypes.c_int32), ctypes.c_int32,
+)
+LLMGetEmbedCallback = ctypes.CFUNCTYPE(
+    ctypes.c_int, ctypes.c_void_p, ctypes.POINTER(ctypes.c_int32), ctypes.c_uint64,
+    ctypes.c_void_p, ctypes.c_uint64,
+)
+
+
+class RKLLMCallback(ctypes.Structure):
+    """
+    Seit release-v1.3.0 erwartet rkllm_init() einen Zeiger auf dieses Struct statt
+    direkt den Result-Callback. Wer (wie bis v1.2.x) den Funktionszeiger übergibt,
+    lässt die Library den Maschinencode der Callback-Funktion als Struct lesen ->
+    SIGSEGV beim ersten Callback (das war Issue airockchip/rknn-llm#509 bei uns).
+    """
+    _fields_ = [
+        ("result_callback",    LLMResultCallback),
+        ("result_userdata",    ctypes.c_void_p),
+        ("tokenizer_callback", LLMTokenizerCallback),  # optional, nur ohne internen Tokenizer
+        ("tokenizer_userdata", ctypes.c_void_p),
+        ("embed_callback",     LLMGetEmbedCallback),   # optional, nur ohne internes Embedding
+        ("embed_userdata",     ctypes.c_void_p),
+    ]
+
 
 # ── Funktions-Signaturen ───────────────────────────────────────────────────────
 _lib.rkllm_createDefaultParam.restype  = RKLLMParam
@@ -297,7 +336,7 @@ _lib.rkllm_init.restype  = ctypes.c_int
 _lib.rkllm_init.argtypes = [
     ctypes.POINTER(ctypes.c_void_p),
     ctypes.POINTER(RKLLMParam),
-    LLMResultCallback,
+    ctypes.POINTER(RKLLMCallback),
 ]
 
 _lib.rkllm_run.restype  = ctypes.c_int
@@ -360,6 +399,8 @@ class RKLLMModel:
         # Callback als Attribut halten, sonst sammelt der GC ihn ein
         # während die C-Lib noch Zeiger darauf hält -> Segfault.
         self._callback = LLMResultCallback(self._on_result)
+        self._callbacks = RKLLMCallback()
+        self._callbacks.result_callback = self._callback
 
         param = _lib.rkllm_createDefaultParam()
         param.model_path         = model_path.encode("utf-8")
@@ -381,7 +422,7 @@ class RKLLMModel:
         param.extend_param.base_domain_id = 0
         param.extend_param.embed_flash = 1
 
-        ret = _lib.rkllm_init(ctypes.byref(self._handle), ctypes.byref(param), self._callback)
+        ret = _lib.rkllm_init(ctypes.byref(self._handle), ctypes.byref(param), ctypes.byref(self._callbacks))
         if ret != 0:
             raise RuntimeError(f"rkllm_init fehlgeschlagen (Code {ret}) für Modell: {model_path}")
         log.info(

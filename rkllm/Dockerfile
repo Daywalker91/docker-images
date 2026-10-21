@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # rkllm Runtime Library von Rockchip GitHub holen
 # ARG wird vom Workflow mit der aktuellen Version gesetzt
-ARG RKLLM_VERSION=v1.2.1
+ARG RKLLM_VERSION=release-v1.3.1
 RUN VERSION_CLEAN=$(echo ${RKLLM_VERSION} | sed 's/^v//') && \
     wget -q "https://github.com/airockchip/rknn-llm/archive/refs/tags/${RKLLM_VERSION}.tar.gz" \
          -O /tmp/rknn-llm.tar.gz && \
