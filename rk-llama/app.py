@@ -32,9 +32,17 @@ N_GPU_LAYERS = int(os.environ.get("N_GPU_LAYERS", "99"))
 THREADS = int(os.environ.get("LLAMA_THREADS", "4"))
 CPU_AFFINITY = os.environ.get("LLAMA_CPU_AFFINITY", "4-7")  # leer = keine Bindung
 
+# Rechenmodus des RKNPU-Backends (Pipelines je Schicht, kommagetrennt, z.B.
+# "W8A8_STANDARD" oder "CPU_STANDARD,W8A8_STANDARD"). Default aus dem Entrypoint,
+# pro Request überschreibbar über das Feld "rknpu_hybrid" – ein anderer Modus
+# startet llama-server neu, wie ein Modellwechsel.
+DEFAULT_HYBRID = os.environ.get("RKNPU_HYBRID", "W8A8_HADAMARD")
+_HYBRID_RE = re.compile(r"^[A-Z0-9_]+(,[A-Z0-9_]+)*$")
+
 # Globaler State
 _server_process = None
 _current_model = None
+_current_hybrid = None
 _server_lock = threading.Lock()
 _server_ready = False
 
@@ -60,7 +68,7 @@ def _wait_for_server(timeout=300):
 
 def _stop_server():
     """Stoppt den laufenden llama-server."""
-    global _server_process, _server_ready, _current_model
+    global _server_process, _server_ready, _current_model, _current_hybrid
     if _server_process and _server_process.poll() is None:
         log.info("Stoppe llama-server...")
         _server_process.terminate()
@@ -71,15 +79,16 @@ def _stop_server():
     _server_process = None
     _server_ready = False
     _current_model = None
+    _current_hybrid = None
 
 
-def _start_server(model_path: str):
-    """Startet llama-server mit dem angegebenen Modell."""
-    global _server_process, _current_model, _server_ready
+def _start_server(model_path: str, hybrid: str):
+    """Startet llama-server mit dem angegebenen Modell und RKNPU-Modus."""
+    global _server_process, _current_model, _current_hybrid, _server_ready
 
     _stop_server()
 
-    log.info(f"Starte llama-server mit Modell: {model_path}")
+    log.info(f"Starte llama-server mit Modell: {model_path} (RKNPU_HYBRID={hybrid})")
     cmd = ["taskset", "-c", CPU_AFFINITY] if CPU_AFFINITY else []
     cmd += [
         LLAMA_SERVER_BIN,
@@ -100,8 +109,10 @@ def _start_server(model_path: str):
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        env={**os.environ, "RKNPU_HYBRID": hybrid},
     )
     _current_model = model_path
+    _current_hybrid = hybrid
 
     # Log-Output in separatem Thread
     def _log_output():
@@ -147,16 +158,27 @@ def _resolve_model_path(model_name: str) -> str:
         return str(local_path)
 
 
-def _ensure_model(model_name: str):
-    """Stellt sicher dass der Server mit dem richtigen Modell läuft."""
+def _resolve_hybrid(hybrid) -> str:
+    """Leer = Default aus der Umgebung; sonst nur Pipeline-Namen zulassen."""
+    if not hybrid:
+        return DEFAULT_HYBRID
+    hybrid = str(hybrid).strip().upper()
+    if not _HYBRID_RE.match(hybrid):
+        raise ValueError(f"Ungültiger rknpu_hybrid: {hybrid}")
+    return hybrid
+
+
+def _ensure_model(model_name: str, hybrid=None):
+    """Stellt sicher dass der Server mit dem richtigen Modell und Modus läuft."""
     global _current_model, _server_ready
 
     model_path = _resolve_model_path(model_name)
+    hybrid = _resolve_hybrid(hybrid)
 
     with _server_lock:
-        if _current_model == model_path and _server_ready:
+        if _current_model == model_path and _current_hybrid == hybrid and _server_ready:
             return  # Bereits geladen
-        if not _start_server(model_path):
+        if not _start_server(model_path, hybrid):
             raise RuntimeError(f"llama-server konnte nicht gestartet werden für: {model_path}")
 
 
@@ -164,7 +186,8 @@ def _ensure_model(model_name: str):
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "model": _current_model, "server_ready": _server_ready})
+    return jsonify({"status": "ok", "model": _current_model, "rknpu_hybrid": _current_hybrid,
+                    "server_ready": _server_ready})
 
 
 @app.route("/v1/models", methods=["GET"])
@@ -190,9 +213,10 @@ def chat_completions():
     model_name = data.get("model")
     if not model_name:
         return jsonify({"error": "Kein Modell angegeben"}), 400
+    hybrid = data.pop("rknpu_hybrid", None)
 
     try:
-        _ensure_model(model_name)
+        _ensure_model(model_name, hybrid)
     except (ValueError, FileNotFoundError, RuntimeError) as e:
         return jsonify({"error": str(e)}), 400
 
@@ -229,9 +253,10 @@ def completions():
     model_name = data.get("model")
     if not model_name:
         return jsonify({"error": "Kein Modell angegeben"}), 400
+    hybrid = data.pop("rknpu_hybrid", None)
 
     try:
-        _ensure_model(model_name)
+        _ensure_model(model_name, hybrid)
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
