@@ -152,6 +152,7 @@ image: ghcr.io/daywalker91/rkllm:latest
 | whisper | montags 04:00 UTC | neue whisper.cpp Version |
 | ollama | – (Workflow deaktiviert) | – |
 | rkllm | – (Workflow deaktiviert) | – |
+| keepalive | monatlich am 1., 03:00 UTC | aktiviert alle Workflows neu, damit GitHub sie nicht nach 60 Tagen ohne Commit abschaltet (von Hand deaktivierte bleiben aus) |
 
 ## Shared Volume Flow
 

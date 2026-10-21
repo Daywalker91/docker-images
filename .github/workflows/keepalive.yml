@@ -1,0 +1,43 @@
+name: Keepalive
+
+# GitHub schaltet geplante Workflows (schedule) in öffentlichen Repos nach
+# 60 Tagen ohne Commit ab ("disabled_inactivity") – dann bauen media, whisper,
+# php-apache usw. unbemerkt keine neuen Images mehr (zuletzt am 2026-09-30
+# passiert). Dieser Workflow aktiviert sie monatlich per API erneut; das setzt
+# den 60-Tage-Zähler zurück (gleicher Ansatz wie liskin/gh-workflow-keepalive,
+# hier ohne fremde Action).
+#
+# Workflows, die von Hand deaktiviert wurden ("disabled_manually", z.B.
+# ollama und rkllm), bleiben aus – nur aktive und wegen Inaktivität
+# abgeschaltete werden (wieder) aktiviert, dieser hier eingeschlossen.
+
+on:
+  schedule:
+    - cron: '0 3 1 * *'   # monatlich am 1. um 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Workflows aktivieren (außer von Hand deaktivierte)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/$REPO/actions/workflows" --paginate \
+            --jq '.workflows[] | [.id, .state, .name] | @tsv' |
+          while IFS=$'\t' read -r id state name; do
+            case "$state" in
+              active|disabled_inactivity)
+                gh api -X PUT "repos/$REPO/actions/workflows/$id/enable"
+                echo "✅ $name ($state) → aktiviert"
+                ;;
+              *)
+                echo "⏸️  $name ($state) → bleibt aus"
+                ;;
+            esac
+          done
