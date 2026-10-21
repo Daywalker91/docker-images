@@ -24,7 +24,7 @@ jobs:
       current_ytdlp: ${{ steps.ytdlp.outputs.version }}
 
     steps:
-      - name: Digest von Docker Hub holen (python:slim)
+      - name: Digest von Docker Hub holen (python:3.13-slim)
         id: digest
         run: |
           TOKEN=$(curl -s \
@@ -34,7 +34,7 @@ jobs:
           DIGEST=$(curl -sI \
             -H "Authorization: Bearer $TOKEN" \
             -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
-            https://registry-1.docker.io/v2/library/python/manifests/slim \
+            https://registry-1.docker.io/v2/library/python/manifests/3.13-slim \
             | grep -i "docker-content-digest" \
             | awk '{print $2}' \
             | tr -d '\r')
@@ -61,8 +61,8 @@ jobs:
           STORED_YTDLP="${{ vars.YTDLP_VERSION }}"
           CURRENT_YTDLP="${{ steps.ytdlp.outputs.version }}"
 
-          echo "python:slim  gespeichert : $STORED_DIGEST"
-          echo "python:slim  aktuell     : $CURRENT_DIGEST"
+          echo "python:3.13-slim gespeichert : $STORED_DIGEST"
+          echo "python:3.13-slim aktuell    : $CURRENT_DIGEST"
           echo "yt-dlp       gespeichert : $STORED_YTDLP"
           echo "yt-dlp       aktuell     : $CURRENT_YTDLP"
 
@@ -77,7 +77,7 @@ jobs:
   # ──────────────────────────────────────────────
   # JOB 2: Multiarch-Image bauen und auf ghcr.io pushen
   #         Läuft wenn:
-  #           - python:slim oder yt-dlp hat sich geändert (schedule)
+  #           - python:3.13-slim oder yt-dlp hat sich geändert (schedule)
   #           - Datei in media/ wurde geändert (push)
   #           - Manuell ausgelöst (workflow_dispatch)
   # ──────────────────────────────────────────────

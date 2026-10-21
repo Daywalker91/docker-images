@@ -38,7 +38,7 @@ jobs:
       current_digest: ${{ steps.digest.outputs.digest }}
 
     steps:
-      - name: Digest von Docker Hub holen (php:apache)
+      - name: Digest von Docker Hub holen (php:8.5-apache)
         id: digest
         run: |
           TOKEN=$(curl -s \
@@ -48,7 +48,7 @@ jobs:
           DIGEST=$(curl -sI \
             -H "Authorization: Bearer $TOKEN" \
             -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
-            https://registry-1.docker.io/v2/library/php/manifests/apache \
+            https://registry-1.docker.io/v2/library/php/manifests/8.5-apache \
             | grep -i "docker-content-digest" \
             | awk '{print $2}' \
             | tr -d '\r')

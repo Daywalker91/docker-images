@@ -1,5 +1,7 @@
-# Base: official php:apache from Docker Hub
-FROM php:apache
+# Base: official php:8.5-apache from Docker Hub
+# Feste Minor-Version: die täglichen Builds holen Sicherheits-Updates (8.5.x),
+# aber kein unbemerktes PHP 8.6/9 – ein Major-Wechsel wird bewusst hier umgestellt.
+FROM php:8.5-apache
 
 LABEL org.opencontainers.image.source="https://github.com/Daywalker91/docker-images"
 LABEL org.opencontainers.image.description="Custom PHP/Apache image"

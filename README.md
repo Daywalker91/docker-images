@@ -7,8 +7,8 @@ Automatische Builds via GitHub Actions → ghcr.io.
 
 | Image | Basis | Architekturen | Update-Trigger | Status |
 |-------|-------|---------------|----------------|--------|
-| [php-apache](./php-apache/) | `php:apache` | amd64, arm64, arm/v7 | täglich | ![Build php-apache](https://github.com/Daywalker91/docker-images/actions/workflows/php-apache.yml/badge.svg) |
-| [media](./media/) | `python:slim` | amd64, arm64, arm/v7 | wöchentlich + yt-dlp Release | ![Build media](https://github.com/Daywalker91/docker-images/actions/workflows/media.yml/badge.svg) |
+| [php-apache](./php-apache/) | `php:8.5-apache` | amd64, arm64, arm/v7 | täglich | ![Build php-apache](https://github.com/Daywalker91/docker-images/actions/workflows/php-apache.yml/badge.svg) |
+| [media](./media/) | `python:3.13-slim` | amd64, arm64, arm/v7 | wöchentlich + yt-dlp Release | ![Build media](https://github.com/Daywalker91/docker-images/actions/workflows/media.yml/badge.svg) |
 | [whisper](./whisper/) | `python:3.12-slim` + whisper.cpp | amd64, arm64 | wöchentlich + whisper.cpp Release | ![Build whisper](https://github.com/Daywalker91/docker-images/actions/workflows/whisper.yml/badge.svg) |
 | [ollama](./ollama/) | `ollama/ollama` | amd64, arm64 | wöchentlich | ![Build ollama](https://github.com/Daywalker91/docker-images/actions/workflows/ollama.yml/badge.svg) |
 | [rkllm](./rkllm/) | `python:slim` + rkllm Runtime | arm64 only | wöchentlich + rknn-llm Release | ![Build rkllm](https://github.com/Daywalker91/docker-images/actions/workflows/rkllm.yml/badge.svg) |
@@ -27,7 +27,7 @@ image: ghcr.io/daywalker91/php-apache:latest
 
 ### media
 Audio-Extraktion aus lokalen Videos und Online-URLs.  
-Enthält: `ffmpeg`, `yt-dlp`, Flask REST-API
+Enthält: `ffmpeg`, `yt-dlp` mit deno (YouTube) und curl-cffi (arm64/amd64), Flask REST-API
 
 **Endpunkte:**
 - `POST /extract/local` – lokale Datei → WAV 16kHz mono
@@ -147,7 +147,7 @@ image: ghcr.io/daywalker91/rkllm:latest
 
 | Container | Schedule | Zusatz-Trigger |
 |-----------|----------|----------------|
-| php-apache | täglich 04:00 UTC | neuer `php:apache` Digest |
+| php-apache | täglich 04:00 UTC | neuer `php:8.5-apache` Digest |
 | media | montags 04:00 UTC | neue yt-dlp Version |
 | whisper | montags 04:00 UTC | neue whisper.cpp Version |
 | ollama | montags 04:00 UTC | neuer `ollama/ollama` Digest |
