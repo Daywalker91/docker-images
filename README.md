@@ -10,8 +10,8 @@ Automatische Builds via GitHub Actions → ghcr.io.
 | [php-apache](./php-apache/) | `php:8.5-apache` | amd64, arm64, arm/v7 | täglich | ![Build php-apache](https://github.com/Daywalker91/docker-images/actions/workflows/php-apache.yml/badge.svg) |
 | [media](./media/) | `python:3.13-slim` | amd64, arm64, arm/v7 | wöchentlich + yt-dlp Release | ![Build media](https://github.com/Daywalker91/docker-images/actions/workflows/media.yml/badge.svg) |
 | [whisper](./whisper/) | `python:3.12-slim` + whisper.cpp | amd64, arm64 | wöchentlich + whisper.cpp Release | ![Build whisper](https://github.com/Daywalker91/docker-images/actions/workflows/whisper.yml/badge.svg) |
-| [ollama](./ollama/) | `ollama/ollama` | amd64, arm64 | wöchentlich | ![Build ollama](https://github.com/Daywalker91/docker-images/actions/workflows/ollama.yml/badge.svg) |
-| [rkllm](./rkllm/) | `python:slim` + rkllm Runtime | arm64 only | wöchentlich + rknn-llm Release | ![Build rkllm](https://github.com/Daywalker91/docker-images/actions/workflows/rkllm.yml/badge.svg) |
+| [ollama](./ollama/) | `ollama/ollama` | amd64, arm64 | ⏸️ Workflow deaktiviert (nicht mehr im Einsatz) | ![Build ollama](https://github.com/Daywalker91/docker-images/actions/workflows/ollama.yml/badge.svg) |
+| [rkllm](./rkllm/) | `python:slim` + rkllm Runtime | arm64 only | ⏸️ Workflow deaktiviert (nicht im Einsatz) | ![Build rkllm](https://github.com/Daywalker91/docker-images/actions/workflows/rkllm.yml/badge.svg) |
 
 ## Container-Übersicht
 
@@ -150,8 +150,8 @@ image: ghcr.io/daywalker91/rkllm:latest
 | php-apache | täglich 04:00 UTC | neuer `php:8.5-apache` Digest |
 | media | montags 04:00 UTC | neue yt-dlp Version |
 | whisper | montags 04:00 UTC | neue whisper.cpp Version |
-| ollama | montags 04:00 UTC | neuer `ollama/ollama` Digest |
-| rkllm | montags 04:00 UTC | neue rknn-llm Version |
+| ollama | – (Workflow deaktiviert) | – |
+| rkllm | – (Workflow deaktiviert) | – |
 
 ## Shared Volume Flow
 
