@@ -3,7 +3,8 @@
 # Quelle: sherpa-onnx (k2-fsa), vorkonvertiert für RK3588 mit rknn-toolkit2 2.1.0
 #   https://modelscope.cn/models/csukuangfj/2026-01-05-rknn
 # Die Runtime im Image ist passend dazu librknnrt 2.1.0 (siehe install_rknnrt.sh).
-# Verfügbar: tiny, base (jeweils mehrsprachig).
+# Verfügbar: base (mehrsprachig). Die dortigen "tiny"-Dateien sind in Wahrheit
+# tiny.en (Tensor-Namen "tiny.en-…", nur Englisch) und liefern bei Deutsch leeren Text.
 set -e
 
 MODEL=${WHISPER_MODEL:-base}
@@ -11,8 +12,8 @@ RKNN_DIR=${RKNN_MODEL_DIR:-/models/rknn}
 BASE_URL="https://modelscope.cn/models/csukuangfj/2026-01-05-rknn/resolve/master"
 
 case "$MODEL" in
-    tiny|base) ;;
-    *) echo "❌ Kein RKNN-Modell für '${MODEL}' (nur tiny, base)"; exit 1 ;;
+    base) ;;
+    *) echo "❌ Kein RKNN-Modell für '${MODEL}' (nur base)"; exit 1 ;;
 esac
 
 mkdir -p "$RKNN_DIR"

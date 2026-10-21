@@ -24,7 +24,8 @@ WHISPER_CPU_AFFINITY = os.environ.get("WHISPER_CPU_AFFINITY", "4-7" if os.uname(
 WHISPER_BEAM_SIZE = os.environ.get("WHISPER_BEAM_SIZE", "5")
 
 CPU_MODELS  = ("tiny", "base", "small", "medium")
-RKNN_MODELS = ("tiny", "base")     # vorkonvertiert verfügbar, siehe download_rknn_models.sh
+RKNN_MODELS = ("base",)            # vorkonvertiert verfügbar, siehe download_rknn_models.sh
+                                   # ("tiny" dort ist in Wahrheit tiny.en, nur Englisch)
 
 # ── Job-Store ──────────────────────────────────────────────────────────────────
 jobs: dict = {}

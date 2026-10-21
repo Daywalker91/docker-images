@@ -67,7 +67,7 @@ RKNN_MODEL_DIR=/models/rknn
 ```
 
 **RKNN-Backend (NPU):**
-- `backend: "rknn"` im Request (oder `WHISPER_BACKEND=rknn`), nur `tiny` und `base`; andere Größen laufen auf der CPU
+- `backend: "rknn"` im Request (oder `WHISPER_BACKEND=rknn`), nur `base`; andere Größen laufen auf der CPU (die vorkonvertierten "tiny"-Modelle sind nur Englisch)
 - Encoder + Decoder mit KV-Cache, Modelle von [sherpa-onnx](https://modelscope.cn/models/csukuangfj/2026-01-05-rknn) (rknn-toolkit2 2.1.0), daher librknnrt 2.1.0 – neuere Runtimes stürzen mit diesen Modellen ab
 - Zugriff über die C-API mit Zero-Copy (`rknn_zc.py`) statt rknnlite
 - Lange Aufnahmen in ≤ 30-s-Fenster an leisen Stellen geteilt, Sprache wird erkannt oder per `language` vorgegeben
