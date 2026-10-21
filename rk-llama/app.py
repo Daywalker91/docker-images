@@ -26,6 +26,11 @@ LLAMA_SERVER_BIN = os.environ.get("LLAMA_SERVER_BIN", "/usr/local/bin/llama-serv
 LLAMA_SERVER_PORT = int(os.environ.get("LLAMA_SERVER_PORT", "8080"))
 CONTEXT_SIZE = int(os.environ.get("CONTEXT_SIZE", "4096"))
 N_GPU_LAYERS = int(os.environ.get("N_GPU_LAYERS", "99"))
+# RK3588: CPU0-3 = Cortex-A55 (langsam), CPU4-7 = Cortex-A76 (schnell).
+# Ohne Vorgabe startet llama-server 8 Threads; die A55 bremsen dann alle aus und
+# bei cpu-Limit 4 im Deployment drosselt CFS zusätzlich -> gemessen ~2 tok/s statt 7-13.
+THREADS = int(os.environ.get("LLAMA_THREADS", "4"))
+CPU_AFFINITY = os.environ.get("LLAMA_CPU_AFFINITY", "4-7")  # leer = keine Bindung
 
 # Globaler State
 _server_process = None
@@ -75,11 +80,13 @@ def _start_server(model_path: str):
     _stop_server()
 
     log.info(f"Starte llama-server mit Modell: {model_path}")
-    cmd = [
+    cmd = ["taskset", "-c", CPU_AFFINITY] if CPU_AFFINITY else []
+    cmd += [
         LLAMA_SERVER_BIN,
         "--model", model_path,
         "--ctx-size", str(CONTEXT_SIZE),
         "--n-gpu-layers", str(N_GPU_LAYERS),
+        "--threads", str(THREADS),
         "--host", "127.0.0.1",
         "--port", str(LLAMA_SERVER_PORT),
         "--parallel", "1",

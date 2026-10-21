@@ -28,6 +28,9 @@ fi
 # RKNPU_HYBRID: Quantisierungsmodus W8A8_HADAMARD ist optimal für RK3588
 export RKNPU_HYBRID="${RKNPU_HYBRID:-W8A8_HADAMARD}"
 
+# rk-llama.cpp hält pro NPU-Matrix eigene Handles offen (Upstream-Doku: ulimit -n 65536)
+ulimit -n 65536 2>/dev/null || echo "WARN: ulimit -n 65536 nicht möglich ($(ulimit -n))"
+
 echo "INFO: Starte rk-llama Wrapper auf Port 5002..."
 echo "INFO: RKNPU_HYBRID=${RKNPU_HYBRID}"
 
