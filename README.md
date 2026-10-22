@@ -10,6 +10,7 @@ Automatische Builds via GitHub Actions → ghcr.io.
 | [php-apache](./php-apache/) | `php:8.5-apache` | amd64, arm64, arm/v7 | täglich | ![Build php-apache](https://github.com/Daywalker91/docker-images/actions/workflows/php-apache.yml/badge.svg) |
 | [media](./media/) | `python:3.13-slim` | amd64, arm64, arm/v7 | wöchentlich + yt-dlp Release | ![Build media](https://github.com/Daywalker91/docker-images/actions/workflows/media.yml/badge.svg) |
 | [whisper](./whisper/) | `python:3.12-slim` + whisper.cpp | amd64, arm64 | wöchentlich + whisper.cpp Release | ![Build whisper](https://github.com/Daywalker91/docker-images/actions/workflows/whisper.yml/badge.svg) |
+| [rk-llama](./rk-llama/) | `ubuntu:24.04` + rk-llama.cpp | arm64 only | wöchentlich + neuer rk-llama.cpp Commit | ![Build rk-llama](https://github.com/Daywalker91/docker-images/actions/workflows/rk-llama.yml/badge.svg) |
 | [ollama](./ollama/) | `ollama/ollama` | amd64, arm64 | ⏸️ Workflow deaktiviert (nicht mehr im Einsatz) | ![Build ollama](https://github.com/Daywalker91/docker-images/actions/workflows/ollama.yml/badge.svg) |
 | [rkllm](./rkllm/) | `python:slim` + rkllm Runtime | arm64 only | ⏸️ Workflow deaktiviert (nicht im Einsatz) | ![Build rkllm](https://github.com/Daywalker91/docker-images/actions/workflows/rkllm.yml/badge.svg) |
 
@@ -89,7 +90,39 @@ image: ghcr.io/daywalker91/whisper:latest
 
 ---
 
+### rk-llama
+LLM-Inferenz für die Rezept-Bibliothek (Rezept-Extraktion, Übersetzung, Varianten) – der einzige LLM-Dienst im Cluster.
+Enthält: [rk-llama.cpp](https://github.com/invisiofficial/rk-llama.cpp) (Branch `rknpu2`, llama.cpp mit RKNPU2-Backend), librknnrt, Flask-Wrapper mit OpenAI-kompatibler API
+
+**arm64 only** – gebaut auf dem eigenen RK3588-Runner, läuft nur auf RK3588.
+
+**Endpunkte:**
+- `POST /v1/chat/completions`, `POST /v1/completions` – OpenAI-kompatibel; `model` = Dateiname auf dem Volume oder `hf:<owner>/<repo>/<datei>.gguf`
+  - optional `rknpu_hybrid` – Rechenmodus pro Request (`CPU_STANDARD`, `W8A8_STANDARD`, `W8A8_HADAMARD`, kommagetrennt kombinierbar); ein anderer Modus oder ein anderes Modell startet llama-server neu (~30–55 s)
+  - `response_format: {"type": "json_object"}` wird durchgereicht → reines JSON
+- `GET /v1/models` – alle `*.gguf` auf dem Volume
+- `GET /health` – geladenes Modell und Modus
+
+**Env-Variablen:**
+```
+MODELS_DIR=/models
+CONTEXT_SIZE=4096
+LLAMA_THREADS=4
+LLAMA_CPU_AFFINITY=4-7          (A76-Kerne; leer = keine Bindung)
+RKNPU_HYBRID=W8A8_HADAMARD      (Standard, wenn der Request keinen Modus mitschickt)
+```
+
+Im Einsatz (Stand 2026-10-22): `qwen2.5-3b-instruct-q4_k_m.gguf` für die Extraktion, `gemma-3-4b-it-Q4_K_M.gguf` für Übersetzungen (auch Polnisch). Skaliert per KEDA auf 0 (Redis-Liste `rk-llama-queue`).
+
+```yaml
+image: ghcr.io/daywalker91/rk-llama:latest
+```
+
+---
+
 ### ollama
+> ⏸️ Nicht mehr im Einsatz (2026-10-21 aus Cluster und App entfernt, rk-llama übernimmt). Image und Workflow bleiben, der Workflow ist deaktiviert.
+
 Lokales LLM für Rezept-Extraktion (CPU/GPU, Fallback).  
 Enthält: Ollama + konfigurierbares Modell
 
@@ -108,6 +141,8 @@ image: ghcr.io/daywalker91/ollama:latest
 ---
 
 ### rkllm
+> ⏸️ Nicht im Einsatz (2026-10-22 aus dem Cluster-Repository entfernt, rk-llama übernimmt). Image und Workflow bleiben, der Workflow ist deaktiviert.
+
 LLM Inferenz auf dem RK3588 NPU via Rockchip RKLLM Runtime.  
 Enthält: `librkllmrt.so`, Python ctypes-Wrapper, Flask REST-API
 
@@ -150,6 +185,7 @@ image: ghcr.io/daywalker91/rkllm:latest
 | php-apache | täglich 04:00 UTC | neuer `php:8.5-apache` Digest |
 | media | montags 04:00 UTC | neue yt-dlp Version |
 | whisper | montags 04:00 UTC | neue whisper.cpp Version |
+| rk-llama | montags 03:00 UTC | neuer Commit in rk-llama.cpp (Branch `rknpu2`) |
 | ollama | – (Workflow deaktiviert) | – |
 | rkllm | – (Workflow deaktiviert) | – |
 | keepalive | monatlich am 1., 03:00 UTC | aktiviert alle Workflows neu, damit GitHub sie nicht nach 60 Tagen ohne Commit abschaltet (von Hand deaktivierte bleiben aus) |
@@ -167,25 +203,24 @@ PHP-Container
     │         │
     │    Transkript → PHP
     │
-    ├─► rkllm-Container      (Rezept-Extraktion) :5002  ← NPU (Standard)
-    │         │
-    │    Rezept → PHP → Review → DB
-    │
-    └─► ollama-Container     (Fallback CPU/GPU)  :11434
+    └─► rk-llama-Container   (Extraktion, Übersetzung) :5002  ← CPU/NPU, KEDA
+              │
+         Rezept → PHP → Review → DB
 ```
 
 ## GitHub Release Assets
 
 | Release Tag | Inhalt | Status |
 |-------------|--------|--------|
-| `whisper-rknn-models` | Whisper base Encoder + Decoder `.rknn` (alter Export ohne KV-Cache, wird nicht mehr genutzt) | ⚠️ veraltet |
-| `qwen2.5-rkllm-models` | Qwen2.5-1.5B `.rkllm` für RK3588 | ⏳ ausstehend |
+| `qwen2.5-rkllm-models` | Qwen2.5-1.5B `.rkllm` für RK3588 | ⏸️ entfällt (rkllm nicht im Einsatz) |
+
+Das frühere Release `whisper-rknn-models` (alter Whisper-Export ohne KV-Cache) wurde am 2026-10-22 gelöscht. Die NPU-Modelle für whisper kommen von [sherpa-onnx auf modelscope](https://modelscope.cn/models/csukuangfj/2026-01-05-rknn), siehe `whisper/download_rknn_models.sh`.
 
 ## Colab-Notebooks
 
 | Notebook | Zweck | Status |
 |----------|-------|--------|
-| [whisper_rknn_convert.ipynb](./colab/whisper_rknn_convert.ipynb) | Whisper → ONNX → RKNN, Upload zu GitHub Release (alter Export, wird nicht mehr genutzt) | ⚠️ veraltet |
+| [whisper_rknn_convert.ipynb](./colab/whisper_rknn_convert.ipynb) | Whisper → ONNX → RKNN (alter Export ohne KV-Cache; das Release dazu ist gelöscht) | 📄 nur noch Dokumentation |
 | qwen2.5_rkllm_convert.ipynb | Qwen2.5 → RKLLM Konvertierung | ⏳ ausstehend |
 
 ## Setup (einmalig)
